@@ -1,0 +1,17 @@
+{
+  "name": "optiqueue-monorepo",
+  "private": true,
+  "workspaces": [
+    "Patient-App",
+    "Admin-Panel",
+    "Live-Queue"
+  ],
+  "scripts": {
+    "patient": "npm run start --workspace=patient-app",
+    "admin": "npm run start --workspace=admin-panel",
+    "live": "npm run start --workspace=live-queue"
+  },
+  "dependencies": {
+    "react-native-safe-area-context": "~5.10.1"
+  }
+}

@@ -1,0 +1,45 @@
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Expo
+.expo/
+**/.expo/
+dist/
+web-build/
+
+# Environment variables and secrets
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Allow example environment files
+!.env.example
+!**/.env.example
+
+# Debug logs
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+
+# TypeScript
+*.tsbuildinfo
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Build outputs
+coverage/
