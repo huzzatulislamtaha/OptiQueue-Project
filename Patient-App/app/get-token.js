@@ -1,4 +1,6 @@
-import React, { useState } from "react";
+
+import React, { useState, useEffect } from "react";
+
 import {
   View,
   Text,
@@ -6,57 +8,131 @@ import {
   TouchableOpacity,
   ScrollView,
 } from "react-native";
-import { SafeAreaView } from 'react-native-safe-area-context';
+
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import { colors, fonts } from "../constants/theme";
 
-const services = [
-  {
-    id: "general",
-    title: "General Consultation",
-    subtitle: "General doctor consultation",
-    icon: "medkit-outline",
-    wait: "18 min",
-    queue: "05 people",
-  },
-  {
-    id: "specialist",
-    title: "Specialist Consultation",
-    subtitle: "Consult with a specialist",
-    icon: "person-outline",
-    wait: "32 min",
-    queue: "08 people",
-  },
-  {
-    id: "diagnostic",
-    title: "Diagnostic / Laboratory",
-    subtitle: "Blood test, imaging & reports",
-    icon: "flask-outline",
-    wait: "12 min",
-    queue: "03 people",
-  },
-  {
-    id: "pharmacy",
-    title: "Pharmacy Service",
-    subtitle: "Medicine collection",
-    icon: "medical-outline",
-    wait: "08 min",
-    queue: "02 people",
-  },
-];
+import { colors, fonts } from "../constants/theme";
+import { API_BASE_URL, API_ENDPOINTS } from "../constants/api";
+
+// Service icons
+const serviceIcons = {
+  "General Consultation": "medkit-outline",
+  "Specialist Consultation": "person-outline",
+  "Diagnostic / Laboratory": "flask-outline",
+  "Pharmacy Service": "medical-outline",
+};
 
 export default function GetToken() {
-  const [selectedService, setSelectedService] = useState("general");
+  const [services, setServices] = useState([]);
+  const [selectedService, setSelectedService] = useState(null);
 
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  // Load services and live queue information
+  const loadServices = async () => {
+    try {
+      setLoading(true);
+      setError("");
+
+      // Fetch available services
+      const serviceResponse = await fetch(
+        `${API_BASE_URL}${API_ENDPOINTS.SERVICES}`
+      );
+
+      if (!serviceResponse.ok) {
+        throw new Error("Unable to load services.");
+      }
+
+      const serviceData = await serviceResponse.json();
+
+      if (
+        !serviceData.success ||
+        !Array.isArray(serviceData.services)
+      ) {
+        throw new Error("Invalid service data received.");
+      }
+
+      // Fetch live queue information separately
+      let liveQueues = [];
+
+      try {
+        const queueResponse = await fetch(
+          `${API_BASE_URL}${API_ENDPOINTS.LIVE_QUEUE}`
+        );
+
+        if (queueResponse.ok) {
+          const queueData = await queueResponse.json();
+
+          if (queueData.success && Array.isArray(queueData.queues)) {
+            liveQueues = queueData.queues;
+          }
+        }
+      } catch (queueError) {
+        console.log("Live Queue Error:", queueError.message);
+      }
+
+      // Convert Backend data into UI format
+      const formattedServices = serviceData.services
+        .filter((service) => service.is_active)
+        .map((service) => {
+          const liveQueue = liveQueues.find(
+            (queue) =>
+              Number(queue.serviceId) === Number(service.id)
+          );
+
+          const waitingCount = liveQueue?.waiting?.length || 0;
+
+          return {
+            id: Number(service.id),
+            title: service.name,
+            subtitle: service.description || "",
+            icon:
+              serviceIcons[service.name] || "medkit-outline",
+            wait: `${service.estimated_wait_minutes} min`,
+            queue: `${waitingCount} people`,
+          };
+        });
+
+      setServices(formattedServices);
+
+      // Select first available service by default
+      if (formattedServices.length > 0) {
+        setSelectedService(formattedServices[0].id);
+      } else {
+        setSelectedService(null);
+        setError("No active services are available.");
+      }
+    } catch (error) {
+      console.log("Load Services Error:", error.message);
+      setError(error.message || "Unable to connect to server.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load services when screen opens
+  useEffect(() => {
+    loadServices();
+  }, []);
+
+  // Get currently selected service
   const selected = services.find(
     (service) => service.id === selectedService
   );
 
+  // Continue to confirmation screen
   const handleContinue = () => {
+    if (!selected) {
+      return;
+    }
+
     router.push({
       pathname: "/confirmation",
       params: {
+        serviceId: String(selected.id),
         service: selected.title,
         wait: selected.wait,
       },
@@ -71,7 +147,11 @@ export default function GetToken() {
         <View style={styles.header}>
           <TouchableOpacity
             style={styles.backButton}
-            onPress={() => router.canGoBack() ? router.back() : router.replace("/")}
+            onPress={() =>
+              router.canGoBack()
+                ? router.back()
+                : router.replace("/")
+            }
             activeOpacity={0.8}
           >
             <Ionicons
@@ -82,7 +162,10 @@ export default function GetToken() {
           </TouchableOpacity>
 
           <View style={styles.headerTextContainer}>
-            <Text style={styles.headerTitle}>Get Digital Token</Text>
+            <Text style={styles.headerTitle}>
+              Get Digital Token
+            </Text>
+
             <Text style={styles.headerSubtitle}>
               Select a service to join the queue
             </Text>
@@ -93,6 +176,7 @@ export default function GetToken() {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
         >
+
           {/* Step Indicator */}
           <View style={styles.stepSection}>
             <View style={styles.stepRow}>
@@ -122,118 +206,185 @@ export default function GetToken() {
 
           {/* Section Header */}
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Choose a Service</Text>
+            <Text style={styles.sectionTitle}>
+              Choose a Service
+            </Text>
+
             <Text style={styles.sectionDescription}>
               Select the service you need today.
             </Text>
           </View>
 
-          {/* Service Cards */}
-          <View style={styles.serviceList}>
-            {services.map((service) => {
-              const isSelected = selectedService === service.id;
+          {/* Loading State */}
+          {loading && (
+            <View style={styles.messageContainer}>
+              <Text style={styles.sectionDescription}>
+                Loading available services...
+              </Text>
+            </View>
+          )}
 
-              return (
-                <TouchableOpacity
-                  key={service.id}
-                  activeOpacity={0.88}
-                  style={[
-                    styles.serviceCard,
-                    isSelected && styles.serviceCardSelected,
-                  ]}
-                  onPress={() => setSelectedService(service.id)}
-                >
-                  {/* Icon */}
-                  <View
-                    style={[
-                      styles.iconBox,
-                      isSelected && styles.iconBoxSelected,
-                    ]}
-                  >
+          {/* Error State */}
+          {!loading && error !== "" && (
+            <View style={styles.messageContainer}>
+              <Ionicons
+                name="alert-circle-outline"
+                size={28}
+                color={colors.danger}
+              />
+
+              <Text style={styles.errorText}>
+                {error}
+              </Text>
+
+              <TouchableOpacity
+                onPress={loadServices}
+                style={styles.retryButton}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.retryText}>
+                  Try Again
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Service Cards */}
+          {!loading && services.length > 0 && (
+            <>
+              <View style={styles.serviceList}>
+                {services.map((service) => {
+                  const isSelected =
+                    selectedService === service.id;
+
+                  return (
+                    <TouchableOpacity
+                      key={service.id}
+                      activeOpacity={0.88}
+                      style={[
+                        styles.serviceCard,
+                        isSelected && styles.serviceCardSelected,
+                      ]}
+                      onPress={() =>
+                        setSelectedService(service.id)
+                      }
+                    >
+
+                      {/* Icon */}
+                      <View
+                        style={[
+                          styles.iconBox,
+                          isSelected && styles.iconBoxSelected,
+                        ]}
+                      >
+                        <Ionicons
+                          name={service.icon}
+                          size={23}
+                          color={
+                            isSelected
+                              ? colors.white
+                              : colors.primary
+                          }
+                        />
+                      </View>
+
+                      {/* Information */}
+                      <View style={styles.serviceInfo}>
+                        <Text style={styles.serviceTitle}>
+                          {service.title}
+                        </Text>
+
+                        <Text style={styles.serviceSubtitle}>
+                          {service.subtitle}
+                        </Text>
+
+                        <View style={styles.serviceMeta}>
+                          <View style={styles.metaItem}>
+                            <Ionicons
+                              name="people-outline"
+                              size={14}
+                              color={colors.textMuted}
+                            />
+
+                            <Text style={styles.metaText}>
+                              {service.queue}
+                            </Text>
+                          </View>
+
+                          <View style={styles.metaItem}>
+                            <Ionicons
+                              name="time-outline"
+                              size={14}
+                              color={colors.textMuted}
+                            />
+
+                            <Text style={styles.metaText}>
+                              ~ {service.wait}
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+
+                      {/* Radio */}
+                      <View
+                        style={[
+                          styles.radio,
+                          isSelected && styles.radioSelected,
+                        ]}
+                      >
+                        {isSelected && (
+                          <View style={styles.radioDot} />
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* Selected Service */}
+              {selected && (
+                <View style={styles.previewCard}>
+                  <View style={styles.previewIcon}>
                     <Ionicons
-                      name={service.icon}
+                      name="checkmark-circle"
                       size={23}
-                      color={isSelected ? colors.white : colors.primary}
+                      color={colors.primary}
                     />
                   </View>
 
-                  {/* Information */}
-                  <View style={styles.serviceInfo}>
-                    <Text style={styles.serviceTitle}>{service.title}</Text>
-                    <Text style={styles.serviceSubtitle}>
-                      {service.subtitle}
+                  <View style={styles.previewInfo}>
+                    <Text style={styles.previewLabel}>
+                      SELECTED SERVICE
                     </Text>
 
-                    <View style={styles.serviceMeta}>
-                      <View style={styles.metaItem}>
-                        <Ionicons
-                          name="people-outline"
-                          size={14}
-                          color={colors.textMuted}
-                        />
-                        <Text style={styles.metaText}>{service.queue}</Text>
-                      </View>
+                    <Text style={styles.previewTitle}>
+                      {selected.title}
+                    </Text>
 
-                      <View style={styles.metaItem}>
-                        <Ionicons
-                          name="time-outline"
-                          size={14}
-                          color={colors.textMuted}
-                        />
-                        <Text style={styles.metaText}>
-                          ~ {service.wait}
-                        </Text>
-                      </View>
-                    </View>
+                    <Text style={styles.previewWait}>
+                      Estimated waiting time: {selected.wait}
+                    </Text>
                   </View>
+                </View>
+              )}
 
-                  {/* Radio */}
-                  <View
-                    style={[
-                      styles.radio,
-                      isSelected && styles.radioSelected,
-                    ]}
-                  >
-                    {isSelected && <View style={styles.radioDot} />}
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+              {/* Information Box */}
+              <View style={styles.infoBox}>
+                <View style={styles.infoIcon}>
+                  <Ionicons
+                    name="information-circle-outline"
+                    size={19}
+                    color={colors.primary}
+                  />
+                </View>
 
-          {/* Selected Service */}
-          <View style={styles.previewCard}>
-            <View style={styles.previewIcon}>
-              <Ionicons
-                name="checkmark-circle"
-                size={23}
-                color={colors.primary}
-              />
-            </View>
-
-            <View style={styles.previewInfo}>
-              <Text style={styles.previewLabel}>SELECTED SERVICE</Text>
-              <Text style={styles.previewTitle}>{selected.title}</Text>
-              <Text style={styles.previewWait}>
-                Estimated waiting time: {selected.wait}
-              </Text>
-            </View>
-          </View>
-
-          {/* Information Box */}
-          <View style={styles.infoBox}>
-            <View style={styles.infoIcon}>
-              <Ionicons
-                name="information-circle-outline"
-                size={19}
-                color={colors.primary}
-              />
-            </View>
-            <Text style={styles.infoText}>
-              Your digital token will be generated after confirming the
-              selected service.
-            </Text>
-          </View>
+                <Text style={styles.infoText}>
+                  Your digital token will be generated after
+                  confirming the selected service.
+                </Text>
+              </View>
+            </>
+          )}
 
           <View style={{ height: 110 }} />
         </ScrollView>
@@ -241,11 +392,18 @@ export default function GetToken() {
         {/* Bottom Button */}
         <View style={styles.bottomContainer}>
           <TouchableOpacity
-            style={styles.continueButton}
+            style={[
+              styles.continueButton,
+              (!selected || loading) && styles.disabledButton,
+            ]}
             activeOpacity={0.88}
             onPress={handleContinue}
+            disabled={!selected || loading}
           >
-            <Text style={styles.continueText}>Continue</Text>
+            <Text style={styles.continueText}>
+              Continue
+            </Text>
+
             <View style={styles.arrowCircle}>
               <Ionicons
                 name="arrow-forward"
@@ -261,6 +419,7 @@ export default function GetToken() {
   );
 }
 
+// Screen Styles
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
@@ -403,6 +562,32 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 5,
     fontFamily: fonts.regular,
+  },
+
+  messageContainer: {
+    paddingVertical: 30,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  errorText: {
+    color: colors.danger,
+    fontSize: 12,
+    marginTop: 8,
+    textAlign: "center",
+    fontFamily: fonts.regular,
+  },
+
+  retryButton: {
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+  },
+
+  retryText: {
+    color: colors.primary,
+    fontSize: 13,
+    fontFamily: fonts.bold,
   },
 
   serviceList: {
@@ -586,6 +771,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+  },
+
+  disabledButton: {
+    opacity: 0.5,
   },
 
   continueText: {

@@ -1,3 +1,4 @@
+
 import React, { useState } from "react";
 import {
   View,
@@ -10,17 +11,21 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import { colors, fonts } from "../constants/theme";
+import { API_BASE_URL, API_ENDPOINTS } from "../constants/api";
+import { getAuthToken } from "../constants/auth";
 
 export default function Confirmation() {
-  const { service, wait } = useLocalSearchParams();
+  const { service, wait, serviceId } = useLocalSearchParams();
 
   const [fullName, setFullName] = useState("");
   const [mobile, setMobile] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const selectedService = service || "General Consultation";
   const estimatedWait = wait || "18 min";
 
-  const handleConfirm = () => {
+  // Create a real token using the backend API
+  const handleConfirm = async () => {
     if (!fullName.trim()) {
       Alert.alert("Required", "Please enter your full name.");
       return;
@@ -39,27 +44,142 @@ export default function Confirmation() {
       return;
     }
 
-    router.push({
-      pathname: "/my-token",
-      params: {
-        service: selectedService,
-        wait: estimatedWait,
-        token: "A-027",
-      },
-    });
+    if (!serviceId || isNaN(Number(serviceId))) {
+      Alert.alert(
+        "Service Error",
+        "Invalid service selected. Please select a service again."
+      );
+      return;
+    }
+
+    if (loading) return;
+
+    try {
+      setLoading(true);
+
+      // Get logged-in patient's authentication token
+      const authToken = await getAuthToken();
+
+      // ========================================
+      // DEBUG LOGS - API REQUEST INFORMATION
+      // ========================================
+
+      console.log(
+        "Create Token URL:",
+        `${API_BASE_URL}${API_ENDPOINTS.CREATE_TOKEN}`
+      );
+
+      console.log("Auth Token Exists:", !!authToken);
+      console.log("Selected Service ID:", serviceId);
+
+      if (!authToken) {
+        Alert.alert(
+          "Login Required",
+          "Your session has expired. Please login again."
+        );
+
+        router.replace("/login");
+        return;
+      }
+
+      // ========================================
+      // SEND CREATE TOKEN REQUEST
+      // ========================================
+
+      console.log("Create Token Request Started...");
+
+      const response = await fetch(
+        `${API_BASE_URL}${API_ENDPOINTS.CREATE_TOKEN}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            serviceId: Number(serviceId),
+          }),
+        }
+      );
+
+      console.log("Create Token Response Status:", response.status);
+
+      const data = await response.json();
+
+      console.log("Create Token Response Data:", data);
+
+      if (!response.ok || !data.success) {
+        throw new Error(
+          data.message || "Unable to create your token."
+        );
+      }
+
+      // Handle token response from backend
+      const tokenData = Array.isArray(data.token)
+        ? data.token[0]
+        : data.token;
+
+      const tokenNumber =
+        tokenData?.token_number ||
+        tokenData?.token ||
+        data.token_number;
+
+      if (!tokenNumber) {
+        throw new Error(
+          "Token number was not returned by the server."
+        );
+      }
+
+      // ========================================
+      // NAVIGATE TO MY TOKEN SCREEN
+      // ========================================
+
+      router.replace({
+        pathname: "/my-token",
+        params: {
+          service: selectedService,
+          wait: estimatedWait,
+          token: String(tokenNumber),
+          tokenId: String(tokenData?.id || ""),
+          queuePosition: String(tokenData?.queue_position || ""),
+        },
+      });
+
+    } catch (error) {
+      console.log("Create Token Error:", error.message);
+
+      Alert.alert(
+        "Token Creation Failed",
+        error.message || "Something went wrong. Please try again."
+      );
+
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <View style={styles.screen}>
       {/* HEADER */}
       <View style={styles.header}>
-        <Pressable style={styles.backButton} onPress={() => router.canGoBack() ? router.back() : router.replace("/")}>
-          <Ionicons name="arrow-back" size={21} color={colors.textPrimary} />
+        <Pressable
+          style={styles.backButton}
+          onPress={() =>
+            router.canGoBack() ? router.back() : router.replace("/")
+          }
+        >
+          <Ionicons
+            name="arrow-back"
+            size={21}
+            color={colors.textPrimary}
+          />
         </Pressable>
 
         <View style={styles.headerText}>
           <Text style={styles.headerTitle}>Confirm Token</Text>
-          <Text style={styles.headerSubtitle}>Review your queue details</Text>
+          <Text style={styles.headerSubtitle}>
+            Review your queue details
+          </Text>
         </View>
       </View>
 
@@ -71,7 +191,11 @@ export default function Confirmation() {
         <View style={styles.progressContainer}>
           <View style={styles.progressStep}>
             <View style={styles.completedCircle}>
-              <Ionicons name="checkmark" size={15} color={colors.white} />
+              <Ionicons
+                name="checkmark"
+                size={15}
+                color={colors.white}
+              />
             </View>
             <Text style={styles.completedText}>Service</Text>
           </View>
@@ -117,11 +241,17 @@ export default function Confirmation() {
 
             <View style={styles.serviceInfo}>
               <Text style={styles.smallLabel}>SELECTED SERVICE</Text>
-              <Text style={styles.serviceName}>{selectedService}</Text>
+              <Text style={styles.serviceName}>
+                {selectedService}
+              </Text>
             </View>
 
             <View style={styles.checkIcon}>
-              <Ionicons name="checkmark" size={15} color={colors.white} />
+              <Ionicons
+                name="checkmark"
+                size={15}
+                color={colors.white}
+              />
             </View>
           </View>
 
@@ -136,6 +266,7 @@ export default function Confirmation() {
                   color={colors.primary}
                 />
               </View>
+
               <View>
                 <Text style={styles.smallLabel}>PEOPLE IN QUEUE</Text>
                 <Text style={styles.infoValue}>5 people</Text>
@@ -150,9 +281,12 @@ export default function Confirmation() {
                   color={colors.primary}
                 />
               </View>
+
               <View>
                 <Text style={styles.smallLabel}>EST. WAIT</Text>
-                <Text style={styles.infoValue}>{estimatedWait}</Text>
+                <Text style={styles.infoValue}>
+                  {estimatedWait}
+                </Text>
               </View>
             </View>
           </View>
@@ -168,8 +302,11 @@ export default function Confirmation() {
                 color={colors.primary}
               />
             </View>
+
             <View>
-              <Text style={styles.patientTitle}>Patient Information</Text>
+              <Text style={styles.patientTitle}>
+                Patient Information
+              </Text>
               <Text style={styles.patientSubtitle}>
                 Required for your digital queue token
               </Text>
@@ -178,12 +315,14 @@ export default function Confirmation() {
 
           {/* NAME */}
           <Text style={styles.inputLabel}>Full Name *</Text>
+
           <View style={styles.inputContainer}>
             <Ionicons
               name="person-outline"
               size={18}
               color={colors.textMuted}
             />
+
             <TextInput
               value={fullName}
               onChangeText={setFullName}
@@ -195,8 +334,14 @@ export default function Confirmation() {
 
           {/* MOBILE */}
           <Text style={styles.inputLabel}>Mobile Number *</Text>
+
           <View style={styles.inputContainer}>
-            <Ionicons name="call-outline" size={18} color={colors.textMuted} />
+            <Ionicons
+              name="call-outline"
+              size={18}
+              color={colors.textMuted}
+            />
+
             <TextInput
               value={mobile}
               onChangeText={setMobile}
@@ -212,10 +357,17 @@ export default function Confirmation() {
         {/* LIVE TRACKING */}
         <View style={styles.liveCard}>
           <View style={styles.liveIcon}>
-            <Ionicons name="pulse-outline" size={22} color={colors.primary} />
+            <Ionicons
+              name="pulse-outline"
+              size={22}
+              color={colors.primary}
+            />
           </View>
+
           <View style={styles.liveTextArea}>
-            <Text style={styles.liveTitle}>Live queue tracking</Text>
+            <Text style={styles.liveTitle}>
+              Live queue tracking
+            </Text>
             <Text style={styles.liveSubtitle}>
               After confirmation, you'll receive a digital token and live queue
               position.
@@ -232,8 +384,11 @@ export default function Confirmation() {
               color={colors.primary}
             />
           </View>
+
           <View style={styles.infoTextArea}>
-            <Text style={styles.infoTitle}>Before you confirm</Text>
+            <Text style={styles.infoTitle}>
+              Before you confirm
+            </Text>
             <Text style={styles.infoDescription}>
               Please make sure the selected service and patient information are
               correct.
@@ -241,19 +396,46 @@ export default function Confirmation() {
           </View>
         </View>
 
-        {/* BUTTON */}
-        <Pressable style={styles.confirmButton} onPress={handleConfirm}>
-          <Ionicons name="ticket-outline" size={19} color={colors.white} />
-          <Text style={styles.confirmButtonText}>Confirm & Get Token</Text>
+        {/* CONFIRM BUTTON */}
+        <Pressable
+          style={[
+            styles.confirmButton,
+            loading && { opacity: 0.6 },
+          ]}
+          onPress={handleConfirm}
+          disabled={loading}
+        >
+          <Ionicons
+            name="ticket-outline"
+            size={19}
+            color={colors.white}
+          />
+
+          <Text style={styles.confirmButtonText}>
+            {loading ? "Creating Token..." : "Confirm & Get Token"}
+          </Text>
         </Pressable>
 
-        <Pressable style={styles.changeButton} onPress={() => router.canGoBack() ? router.back() : router.replace("/")}>
-          <Text style={styles.changeButtonText}>Change Service</Text>
+        <Pressable
+          style={styles.changeButton}
+          onPress={() =>
+            router.canGoBack() ? router.back() : router.replace("/")
+          }
+          disabled={loading}
+        >
+          <Text style={styles.changeButtonText}>
+            Change Service
+          </Text>
         </Pressable>
       </ScrollView>
     </View>
   );
 }
+
+// ========================================
+// STYLES
+// Existing design preserved
+// ========================================
 
 const styles = {
   screen: {

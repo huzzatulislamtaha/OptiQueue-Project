@@ -5,6 +5,7 @@ const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const supabase = require("./db");
 
 const app = express();
@@ -18,14 +19,64 @@ if (!JWT_SECRET || JWT_SECRET.length < 32) {
   );
 }
 
-// Middleware
-app.use(cors({
-  origin: process.env.CORS_ORIGIN
-    ? process.env.CORS_ORIGIN.split(",").map((item) => item.trim())
-    : true,
-}));
+/* ------------------------ MIDDLEWARE --------------------- */
+
+// Allowed frontend origins
+const defaultOrigins = [
+  "http://localhost:8081",
+  "http://localhost:8082",
+  "http://localhost:8083",
+  "http://127.0.0.1:8081",
+  "http://127.0.0.1:8082",
+  "http://127.0.0.1:8083",
+];
+
+// Read additional origins from Backend/.env
+const envOrigins = (process.env.CORS_ORIGIN || "")
+  .split(",")
+  .map((item) => item.trim())
+  .filter((item) => item && item !== "*");
+
+// Combine allowed origins
+const allowedOrigins = [...new Set([
+  ...defaultOrigins,
+  ...envOrigins,
+])];
+
+// CORS configuration
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow mobile apps and requests without an Origin header
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      // Allow only configured frontend origins
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      console.warn("Blocked CORS origin:", origin);
+
+      return callback(new Error("Origin not allowed by CORS"));
+    },
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    optionsSuccessStatus: 204,
+  })
+);
 
 app.use(express.json({ limit: "1mb" }));
+
+// Basic security headers
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
 
 // Send error response
 function sendError(res, status, message) {
@@ -41,13 +92,14 @@ function asyncRoute(handler) {
     Promise.resolve(handler(req, res, next)).catch(next);
 }
 
-// Create JWT token
+// Create JWT token with a unique session ID
 function createToken(user) {
   return jwt.sign(
     {
       sub: String(user.id),
       role: user.role,
       email: user.email,
+      jti: crypto.randomUUID(),
     },
     JWT_SECRET,
     {
@@ -57,22 +109,77 @@ function createToken(user) {
 }
 
 // Authentication middleware
+// Checks JWT, revoked session and current database user
 function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ")
-    ? header.slice(7)
+    ? header.slice(7).trim()
     : null;
 
   if (!token) {
     return sendError(res, 401, "Authentication token is required.");
   }
 
+  let decoded;
+
+  // Verify JWT signature and expiry
   try {
-    req.auth = jwt.verify(token, JWT_SECRET);
-    return next();
+    decoded = jwt.verify(token, JWT_SECRET);
   } catch {
     return sendError(res, 401, "Invalid or expired authentication token.");
   }
+
+  // Validate required JWT fields
+  if (
+    !decoded ||
+    typeof decoded !== "object" ||
+    !decoded.sub ||
+    !decoded.jti ||
+    !decoded.exp ||
+    !decoded.role
+  ) {
+    return sendError(res, 401, "Invalid authentication token.");
+  }
+
+  // Check revoked session and current user
+  Promise.resolve()
+    .then(async () => {
+      // Check whether the session has been revoked
+      const { data: revoked, error: revokedError } = await supabase
+        .from("revoked_tokens")
+        .select("jti")
+        .eq("jti", decoded.jti)
+        .maybeSingle();
+
+      if (revokedError) throw revokedError;
+
+      if (revoked) {
+        return sendError(res, 401, "This session has been logged out.");
+      }
+
+      // Check whether the user account still exists
+      const { data: user, error: userError } = await supabase
+        .from("users")
+        .select("id, role")
+        .eq("id", decoded.sub)
+        .maybeSingle();
+
+      if (userError) throw userError;
+
+      if (!user) {
+        return sendError(res, 401, "User account no longer exists.");
+      }
+
+      // Use the current database role
+      req.auth = {
+        ...decoded,
+        sub: String(user.id),
+        role: user.role,
+      };
+
+      return next();
+    })
+    .catch(next);
 }
 
 // Role checking middleware
@@ -97,7 +204,11 @@ function normalizeEmail(value) {
 
 // Validate password
 function validPassword(value) {
-  return typeof value === "string" && value.length >= 8;
+  return (
+    typeof value === "string" &&
+    value.length >= 8 &&
+    value.length <= 128
+  );
 }
 
 // Root route
@@ -127,12 +238,24 @@ app.post("/api/auth/register", asyncRoute(async (req, res) => {
   const email = normalizeEmail(req.body.email);
   const password = req.body.password;
 
-  if (!name || !email || !validPassword(password)) {
+  if (
+    !name ||
+    name.length > 100 ||
+    !email ||
+    email.length > 150 ||
+    !validPassword(password)
+  ) {
     return sendError(
       res,
       400,
-      "Name, valid email and password (minimum 8 characters) are required."
+      "Name, valid email and password (8-128 characters) are required."
     );
+  }
+
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  if (!emailPattern.test(email)) {
+    return sendError(res, 400, "Please enter a valid email address.");
   }
 
   const passwordHash = await bcrypt.hash(password, 12);
@@ -181,7 +304,11 @@ app.post("/api/auth/login", asyncRoute(async (req, res) => {
 
   if (error) throw error;
 
-  if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+  if (
+    !user ||
+    !user.password_hash ||
+    !(await bcrypt.compare(password, user.password_hash))
+  ) {
     return sendError(res, 401, "Email or password is incorrect.");
   }
 
@@ -210,7 +337,10 @@ app.post("/api/auth/setup-admin", asyncRoute(async (req, res) => {
     return sendError(res, 404, "Admin setup is disabled.");
   }
 
-  if (req.body.setupKey !== setupKey) {
+  if (
+    typeof req.body.setupKey !== "string" ||
+    req.body.setupKey !== setupKey
+  ) {
     return sendError(res, 403, "Invalid setup key.");
   }
 
@@ -218,12 +348,24 @@ app.post("/api/auth/setup-admin", asyncRoute(async (req, res) => {
   const email = normalizeEmail(req.body.email);
   const password = req.body.password;
 
-  if (!name || !email || !validPassword(password)) {
+  if (
+    !name ||
+    name.length > 100 ||
+    !email ||
+    email.length > 150 ||
+    !validPassword(password)
+  ) {
     return sendError(
       res,
       400,
-      "Name, valid email and password (minimum 8 characters) are required."
+      "Name, valid email and password (8-128 characters) are required."
     );
+  }
+
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  if (!emailPattern.test(email)) {
+    return sendError(res, 400, "Please enter a valid email address.");
   }
 
   const passwordHash = await bcrypt.hash(password, 12);
@@ -274,6 +416,34 @@ app.get("/api/auth/me", requireAuth, asyncRoute(async (req, res) => {
   });
 }));
 
+// Logout and revoke current session
+app.post(
+  "/api/auth/logout",
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const { error } = await supabase
+      .from("revoked_tokens")
+      .upsert(
+        {
+          jti: req.auth.jti,
+          user_id: req.auth.sub,
+          expires_at: new Date(req.auth.exp * 1000).toISOString(),
+        },
+        {
+          onConflict: "jti",
+          ignoreDuplicates: true,
+        }
+      );
+
+    if (error) throw error;
+
+    return res.json({
+      success: true,
+      message: "Logout successful. Session revoked.",
+    });
+  })
+);
+
 // Update logged-in patient's profile
 app.patch(
   "/api/auth/profile",
@@ -289,7 +459,11 @@ app.patch(
       return sendError(res, 400, "Name and email are required.");
     }
 
-    if (name.length > 100 || email.length > 150 || mobileNumber.length > 20) {
+    if (
+      name.length > 100 ||
+      email.length > 150 ||
+      mobileNumber.length > 20
+    ) {
       return sendError(res, 400, "Profile information is too long.");
     }
 
@@ -553,13 +727,19 @@ app.patch(
       .from("tokens")
       .update({ status: "cancelled" })
       .eq("id", tokenId)
+      .eq("user_id", req.auth.sub)
+      .eq("status", "waiting")
       .select()
       .maybeSingle();
 
     if (error) throw error;
 
     if (!data) {
-      return sendError(res, 404, "Token not found.");
+      return sendError(
+        res,
+        409,
+        "Token could not be cancelled. Please refresh and try again."
+      );
     }
 
     const { error: historyError } = await supabase
@@ -588,6 +768,7 @@ app.post(
   requireRole("admin"),
   asyncRoute(async (req, res) => {
     const name = String(req.body.name || "").trim();
+
     const serviceId =
       req.body.service_id === undefined ||
       req.body.service_id === null ||
@@ -595,8 +776,8 @@ app.post(
         ? null
         : Number(req.body.service_id);
 
-    if (!name) {
-      return sendError(res, 400, "Counter name is required.");
+    if (!name || name.length > 100) {
+      return sendError(res, 400, "Valid counter name is required.");
     }
 
     if (
@@ -680,8 +861,8 @@ app.patch(
     if (req.body.name !== undefined) {
       const name = String(req.body.name).trim();
 
-      if (!name) {
-        return sendError(res, 400, "Counter name cannot be empty.");
+      if (!name || name.length > 100) {
+        return sendError(res, 400, "Invalid counter name.");
       }
 
       updates.name = name;
@@ -816,11 +997,28 @@ app.get(
       .limit(200);
 
     if (req.query.status) {
+      const allowedStatuses = [
+        "waiting",
+        "serving",
+        "completed",
+        "cancelled",
+      ];
+
+      if (!allowedStatuses.includes(req.query.status)) {
+        return sendError(res, 400, "Invalid token status filter.");
+      }
+
       query = query.eq("status", req.query.status);
     }
 
     if (req.query.serviceId) {
-      query = query.eq("service_id", Number(req.query.serviceId));
+      const serviceId = Number(req.query.serviceId);
+
+      if (!Number.isInteger(serviceId) || serviceId < 1) {
+        return sendError(res, 400, "Invalid service ID.");
+      }
+
+      query = query.eq("service_id", serviceId);
     }
 
     const { data, error } = await query;
@@ -881,6 +1079,19 @@ app.patch(
 
       if (!Number.isInteger(counterId) || counterId < 1) {
         return sendError(res, 400, "Invalid counter ID.");
+      }
+
+      // Verify that the counter exists and is active
+      const { data: counter, error: counterError } = await supabase
+        .from("counters")
+        .select("id, is_active")
+        .eq("id", counterId)
+        .maybeSingle();
+
+      if (counterError) throw counterError;
+
+      if (!counter || !counter.is_active) {
+        return sendError(res, 404, "Active counter not found.");
       }
 
       updates.counter_id = counterId;
@@ -1006,7 +1217,6 @@ app.patch(
 
     if (error) throw error;
 
-    // Return 404 if notification does not exist
     if (!data) {
       return sendError(res, 404, "Notification not found.");
     }
@@ -1024,6 +1234,10 @@ app.patch(
 // Handle unexpected server errors
 app.use((err, _req, res, _next) => {
   console.error("OptiQueue API error:", err.message || err);
+
+  if (res.headersSent) {
+    return;
+  }
 
   return res.status(500).json({
     success: false,

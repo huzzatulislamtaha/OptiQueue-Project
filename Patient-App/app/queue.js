@@ -1,3 +1,4 @@
+
 import React from "react";
 import {
   View,
@@ -5,24 +6,216 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  ActivityIndicator,
 } from "react-native";
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { colors, fonts } from "../constants/theme";
-
-const queueData = [
-  { token: "A-021", status: "Served" },
-  { token: "A-022", status: "Served" },
-  { token: "A-023", status: "Served" },
-  { token: "A-024", status: "Serving" },
-  { token: "A-025", status: "Waiting" },
-  { token: "A-026", status: "Waiting" },
-  { token: "A-027", status: "You" },
-  { token: "A-028", status: "Waiting" },
-];
+import { API_BASE_URL, API_ENDPOINTS } from "../constants/api";
+import { getAuthToken } from "../constants/auth";
 
 export default function Queue() {
+  const params = useLocalSearchParams();
+
+  const paramToken = Array.isArray(params.token)
+    ? params.token[0]
+    : params.token;
+
+  const paramServiceId = Array.isArray(params.serviceId)
+    ? params.serviceId[0]
+    : params.serviceId;
+
+  const [myTokens, setMyTokens] = React.useState([]);
+  const [queues, setQueues] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [refreshing, setRefreshing] = React.useState(false);
+  const [error, setError] = React.useState("");
+
+  // Fetch My Tokens and Live Queue
+  const fetchQueueData = React.useCallback(async (manualRefresh = false) => {
+    try {
+      if (manualRefresh) setRefreshing(true);
+
+      const authToken = await getAuthToken();
+
+      if (!authToken) {
+        throw new Error("Please login again.");
+      }
+
+      const headers = {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      };
+
+      const [myResponse, queueResponse] = await Promise.all([
+        fetch(`${API_BASE_URL}${API_ENDPOINTS.MY_TOKENS}`, {
+          method: "GET",
+          headers,
+        }),
+        fetch(`${API_BASE_URL}${API_ENDPOINTS.LIVE_QUEUE}`, {
+          method: "GET",
+          headers,
+        }),
+      ]);
+
+      const myData = await myResponse.json();
+      const queueData = await queueResponse.json();
+
+      console.log("QUEUE MY TOKENS:", myData);
+      console.log("QUEUE LIVE DATA:", queueData);
+
+      if (!myResponse.ok || !myData.success) {
+        throw new Error(myData.message || "Unable to load your tokens.");
+      }
+
+      if (!queueResponse.ok || !queueData.success) {
+        throw new Error(queueData.message || "Unable to load live queue.");
+      }
+
+      setMyTokens(Array.isArray(myData.tokens) ? myData.tokens : []);
+      setQueues(Array.isArray(queueData.queues) ? queueData.queues : []);
+      setError("");
+    } catch (err) {
+      console.log("LIVE QUEUE ERROR:", err.message);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  // Initial Load and Auto Refresh
+  React.useEffect(() => {
+    fetchQueueData();
+
+    const interval = setInterval(() => {
+      fetchQueueData();
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [fetchQueueData]);
+
+  // Select Patient's Token
+  const selectedToken = React.useMemo(() => {
+    if (!myTokens.length) return null;
+
+    if (paramToken) {
+      const matched = myTokens.find(
+        (item) => item.token_number === paramToken
+      );
+      if (matched) return matched;
+    }
+
+    if (paramServiceId) {
+      const matched = myTokens.find(
+        (item) => String(item.service_id) === String(paramServiceId)
+      );
+      if (matched) return matched;
+    }
+
+    // Latest token first
+    return myTokens[0];
+  }, [myTokens, paramToken, paramServiceId]);
+
+  // Find Queue for Patient's Service
+  const currentQueue = queues.find(
+    (item) =>
+      String(item.serviceId) === String(selectedToken?.service_id)
+  );
+
+  const waitingList = currentQueue?.waiting || [];
+  const nowServing = currentQueue?.nowServing || null;
+
+  // Serving Token Number
+  const servingToken =
+    typeof nowServing === "string"
+      ? nowServing
+      : nowServing?.token ||
+        nowServing?.token_number ||
+        null;
+
+  // Patient's Token
+  const myTokenNumber = selectedToken?.token_number || null;
+
+  const myTokenStatus = selectedToken?.status || "waiting";
+
+  // Find Patient in Waiting List
+  const myQueueItem = waitingList.find(
+    (item) =>
+      String(item.id) === String(selectedToken?.id) ||
+      item.token === myTokenNumber
+  );
+
+  const myPosition =
+    myQueueItem?.queuePosition ??
+    selectedToken?.queue_position ??
+    null;
+
+  // Build Actual Queue List
+  const queueData = React.useMemo(() => {
+    const items = [];
+
+    // Currently serving token
+    if (servingToken) {
+      items.push({
+        token: servingToken,
+        status: "Serving",
+        id: nowServing?.id || "serving",
+      });
+    }
+
+    // Waiting tokens from backend
+    waitingList.forEach((item) => {
+      items.push({
+        id: item.id,
+        token: item.token,
+        status:
+          item.token === myTokenNumber ? "You" : "Waiting",
+        queuePosition: item.queuePosition,
+      });
+    });
+
+    return items;
+  }, [servingToken, waitingList, myTokenNumber, nowServing]);
+
+  // Number of people ahead of patient
+  const peopleAhead =
+    myPosition !== null ? Math.max(Number(myPosition) - 1, 0) : null;
+
+  const totalWaiting = waitingList.length;
+
+  // Progress based on actual queue position
+  const progressPercent =
+    myPosition && totalWaiting
+      ? Math.min(
+          Math.max(
+            ((totalWaiting - Number(myPosition) + 1) /
+              totalWaiting) *
+              100,
+            0
+          ),
+          100
+        )
+      : 0;
+
+  const serviceName =
+    currentQueue?.service ||
+    selectedToken?.services?.name ||
+    "Live Queue";
+
+  // Loading
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.loadingText}>Loading live queue...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
@@ -31,7 +224,9 @@ export default function Queue() {
         <View style={styles.header}>
           <TouchableOpacity
             style={styles.backButton}
-            onPress={() => router.canGoBack() ? router.back() : router.replace("/")}
+            onPress={() =>
+              router.canGoBack() ? router.back() : router.replace("/")
+            }
           >
             <Ionicons
               name="arrow-back"
@@ -42,9 +237,13 @@ export default function Queue() {
 
           <Text style={styles.headerTitle}>Live Queue Status</Text>
 
-          <TouchableOpacity style={styles.menuButton}>
+          <TouchableOpacity
+            style={styles.menuButton}
+            onPress={() => fetchQueueData(true)}
+            disabled={refreshing}
+          >
             <Ionicons
-              name="ellipsis-vertical"
+              name="refresh-outline"
               size={21}
               color={colors.textPrimary}
             />
@@ -55,54 +254,86 @@ export default function Queue() {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.content}
         >
+
+          {/* Error Message */}
+          {error !== "" && (
+            <View style={styles.errorCard}>
+              <Text style={styles.errorText}>{error}</Text>
+              <TouchableOpacity onPress={() => fetchQueueData(true)}>
+                <Text style={styles.retryText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* Current Token Card */}
           <View style={styles.currentCard}>
             <View style={styles.currentTop}>
               <View>
                 <View style={styles.currentLabelRow}>
-                  <Text style={styles.currentLabel}>Current Token</Text>
+                  <Text style={styles.currentLabel}>Currently Serving</Text>
+
                   <View style={styles.liveBadge}>
                     <View style={styles.liveDot} />
                     <Text style={styles.liveText}>LIVE</Text>
                   </View>
                 </View>
-                <Text style={styles.currentToken}>A-024</Text>
+
+                <Text style={styles.currentToken}>
+                  {servingToken || "—"}
+                </Text>
+
+                <Text style={styles.serviceSubtitle}>
+                  {serviceName}
+                </Text>
               </View>
 
               <View style={styles.currentIcon}>
-                <Ionicons name="pulse" size={32} color={colors.primary} />
+                <Ionicons
+                  name="pulse"
+                  size={32}
+                  color={colors.primary}
+                />
               </View>
             </View>
 
-            {/* Queue Status Cards */}
+            {/* Dynamic Queue Status Cards */}
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.statusScroll}
             >
-              {queueData.slice(0, 6).map((item) => {
+              {queueData.slice(0, 8).map((item) => {
                 const isServing = item.status === "Serving";
-                const isServed = item.status === "Served";
+                const isYou = item.status === "You";
 
                 return (
                   <View
-                    key={item.token}
+                    key={String(item.id)}
                     style={[
                       styles.statusCard,
                       isServing && styles.activeStatusCard,
+                      isYou && styles.youStatusCard,
                     ]}
                   >
                     <View
                       style={[
                         styles.statusCircle,
                         isServing && styles.activeCircle,
-                        isServed && styles.servedCircle,
+                        isYou && styles.youCircle,
                       ]}
                     >
                       <Ionicons
-                        name={isServing ? "radio-button-on" : "checkmark"}
+                        name={
+                          isServing
+                            ? "radio-button-on"
+                            : isYou
+                              ? "person"
+                              : "time-outline"
+                        }
                         size={13}
-                        color={isServing ? colors.primary : colors.white}
+                        color={
+                          isServing ? colors.white : colors.primary
+                        }
                       />
                     </View>
 
@@ -110,36 +341,46 @@ export default function Queue() {
                       style={[
                         styles.statusToken,
                         isServing && styles.activeStatusToken,
+                        isYou && styles.activeStatusToken,
                       ]}
                     >
                       {item.token}
                     </Text>
 
                     <Text style={styles.statusName}>
-                      {isServing ? "Serving" : "Served"}
+                      {item.status}
                     </Text>
                   </View>
                 );
               })}
 
-              {/* Your Token */}
-              <View style={styles.statusCard}>
-                <View style={styles.youCircle}>
-                  <Ionicons name="person" size={13} color={colors.primary} />
-                </View>
-                <Text style={styles.statusToken}>A-027</Text>
-                <Text style={styles.statusName}>You</Text>
-              </View>
+              {queueData.length === 0 && (
+                <Text style={styles.emptyText}>
+                  No queue tokens available.
+                </Text>
+              )}
             </ScrollView>
 
             {/* Progress */}
             <View style={styles.progressHeader}>
-              <Text style={styles.progressText}>3 of 5 ahead of you</Text>
-              <Text style={styles.progressPercent}>75%</Text>
+              <Text style={styles.progressText}>
+                {peopleAhead !== null
+                  ? `${peopleAhead} people ahead of you`
+                  : "Your queue position is unavailable"}
+              </Text>
+
+              <Text style={styles.progressPercent}>
+                {Math.round(progressPercent)}%
+              </Text>
             </View>
 
             <View style={styles.progressTrack}>
-              <View style={styles.progressFill} />
+              <View
+                style={[
+                  styles.progressFill,
+                  { width: `${progressPercent}%` },
+                ]}
+              />
             </View>
           </View>
 
@@ -148,37 +389,45 @@ export default function Queue() {
             <View style={styles.yourTokenHeader}>
               <View>
                 <Text style={styles.yourTokenLabel}>Your Token</Text>
-                <Text style={styles.yourTokenNumber}>A-027</Text>
+                <Text style={styles.yourTokenNumber}>
+                  {myTokenNumber || "—"}
+                </Text>
               </View>
 
               <View style={styles.inQueueBadge}>
                 <View style={styles.inQueueDot} />
-                <Text style={styles.inQueueText}>IN QUEUE</Text>
+                <Text style={styles.inQueueText}>
+                  {String(myTokenStatus).toUpperCase()}
+                </Text>
               </View>
             </View>
 
             {/* Stats */}
             <View style={styles.statsRow}>
               <View style={styles.statItem}>
-                <Text style={styles.statLabel}>Waiting Time</Text>
-                <Text style={styles.statValue}>~18</Text>
-                <Text style={styles.statUnit}>Minutes</Text>
-              </View>
-
-              <View style={styles.statDivider} />
-
-              <View style={styles.statItem}>
-                <Text style={styles.statLabel}>Your Position</Text>
-                <Text style={styles.statValue}>4</Text>
+                <Text style={styles.statLabel}>Waiting Tokens</Text>
+                <Text style={styles.statValue}>{totalWaiting}</Text>
                 <Text style={styles.statUnit}>in queue</Text>
               </View>
 
               <View style={styles.statDivider} />
 
               <View style={styles.statItem}>
-                <Text style={styles.statLabel}>Est. Call Time</Text>
-                <Text style={styles.callValue}>3:30 PM</Text>
-                <Text style={styles.statUnit}>Today</Text>
+                <Text style={styles.statLabel}>Your Position</Text>
+                <Text style={styles.statValue}>
+                  {myPosition ?? "—"}
+                </Text>
+                <Text style={styles.statUnit}>in queue</Text>
+              </View>
+
+              <View style={styles.statDivider} />
+
+              <View style={styles.statItem}>
+                <Text style={styles.statLabel}>People Ahead</Text>
+                <Text style={styles.callValue}>
+                  {peopleAhead ?? "—"}
+                </Text>
+                <Text style={styles.statUnit}>before you</Text>
               </View>
             </View>
 
@@ -186,20 +435,36 @@ export default function Queue() {
             <View style={styles.timeline}>
               <View style={styles.timelineItem}>
                 <View style={styles.timelineCircleActive}>
-                  <Ionicons name="people" size={17} color={colors.white} />
+                  <Ionicons
+                    name="people"
+                    size={17}
+                    color={colors.white}
+                  />
                 </View>
-                <Text style={styles.timelineTitleActive}>Waiting</Text>
-                <Text style={styles.timelineSubtitle}>Hang tight</Text>
+                <Text style={styles.timelineTitleActive}>
+                  Waiting
+                </Text>
+                <Text style={styles.timelineSubtitle}>
+                  {myTokenStatus === "waiting" ? "In queue" : "Queue"}
+                </Text>
               </View>
 
               <View style={styles.timelineLineActive} />
 
               <View style={styles.timelineItem}>
                 <View style={styles.timelineCircleMiddle}>
-                  <Ionicons name="walk" size={17} color={colors.primary} />
+                  <Ionicons
+                    name="walk"
+                    size={17}
+                    color={colors.primary}
+                  />
                 </View>
-                <Text style={styles.timelineTitle}>Almost There</Text>
-                <Text style={styles.timelineSubtitle}>You're next</Text>
+                <Text style={styles.timelineTitle}>
+                  Almost There
+                </Text>
+                <Text style={styles.timelineSubtitle}>
+                  {peopleAhead === 0 ? "You're next" : "Please wait"}
+                </Text>
               </View>
 
               <View style={styles.timelineLine} />
@@ -212,8 +477,12 @@ export default function Queue() {
                     color={colors.timelineInactive}
                   />
                 </View>
-                <Text style={styles.timelineTitle}>Your Turn</Text>
-                <Text style={styles.timelineSubtitle}>See the doctor</Text>
+                <Text style={styles.timelineTitle}>
+                  Your Turn
+                </Text>
+                <Text style={styles.timelineSubtitle}>
+                  See the doctor
+                </Text>
               </View>
             </View>
           </View>
@@ -229,10 +498,11 @@ export default function Queue() {
             </View>
 
             <View style={styles.reminderTextContainer}>
-              <Text style={styles.reminderTitle}>Queue Reminder</Text>
+              <Text style={styles.reminderTitle}>
+                Queue Reminder
+              </Text>
               <Text style={styles.reminderText}>
-                Please stay nearby. Your queue status will update
-                automatically.
+                Please stay nearby. Your queue status updates automatically.
               </Text>
             </View>
           </View>
@@ -240,7 +510,9 @@ export default function Queue() {
           {/* Live Queue List */}
           <View style={styles.queueSectionHeader}>
             <Text style={styles.queueSectionTitle}>Queue Status</Text>
-            <Text style={styles.queueCount}>8 Tokens</Text>
+            <Text style={styles.queueCount}>
+              {queueData.length} Tokens
+            </Text>
           </View>
 
           <View style={styles.queueList}>
@@ -250,7 +522,7 @@ export default function Queue() {
 
               return (
                 <View
-                  key={item.token}
+                  key={String(item.id)}
                   style={[
                     styles.queueRow,
                     isServing && styles.queueServingRow,
@@ -265,7 +537,11 @@ export default function Queue() {
                     ]}
                   >
                     {isServing ? (
-                      <Ionicons name="play" size={11} color={colors.white} />
+                      <Ionicons
+                        name="play"
+                        size={11}
+                        color={colors.white}
+                      />
                     ) : (
                       <Text
                         style={[
@@ -273,7 +549,7 @@ export default function Queue() {
                           isYou && styles.queueNumberTextYou,
                         ]}
                       >
-                        {item.token.replace("A-", "")}
+                        {item.token.split("-")[1] || ""}
                       </Text>
                     )}
                   </View>
@@ -302,11 +578,18 @@ export default function Queue() {
                 </View>
               );
             })}
+
+            {queueData.length === 0 && (
+              <View style={styles.emptyCard}>
+                <Text style={styles.emptyText}>
+                  No tokens in this queue yet.
+                </Text>
+              </View>
+            )}
           </View>
 
           <View style={{ height: 35 }} />
         </ScrollView>
-
       </View>
     </SafeAreaView>
   );
@@ -321,6 +604,61 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+
+  loadingContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  loadingText: {
+    color: colors.textMuted,
+    fontSize: 13,
+    marginTop: 12,
+    fontFamily: fonts.regular,
+  },
+
+  errorCard: {
+    backgroundColor: colors.white,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+
+  errorText: {
+    color: colors.danger,
+    fontSize: 12,
+    fontFamily: fonts.regular,
+  },
+
+  retryText: {
+    color: colors.primary,
+    fontSize: 12,
+    marginTop: 8,
+    fontFamily: fonts.bold,
+  },
+
+  emptyCard: {
+    backgroundColor: colors.white,
+    borderRadius: 12,
+    padding: 18,
+    alignItems: "center",
+  },
+
+  emptyText: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontFamily: fonts.regular,
+  },
+
+  serviceSubtitle: {
+    color: colors.textMuted,
+    fontSize: 10,
+    marginTop: 4,
+    fontFamily: fonts.regular,
   },
 
   header: {
@@ -452,6 +790,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 4,
   },
 
+  youStatusCard: {
+    backgroundColor: colors.selectedCardBg,
+    borderColor: colors.primaryLightBorder,
+  },
+
   statusCircle: {
     width: 22,
     height: 22,
@@ -467,7 +810,7 @@ const styles = StyleSheet.create({
   },
 
   activeCircle: {
-    backgroundColor: colors.activeCircleBg,
+    backgroundColor: colors.primary,
   },
 
   youCircle: {
@@ -524,7 +867,6 @@ const styles = StyleSheet.create({
   },
 
   progressFill: {
-    width: "75%",
     height: "100%",
     backgroundColor: colors.primary,
     borderRadius: 5,

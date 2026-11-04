@@ -1,12 +1,12 @@
 
 import React, { useEffect, useState } from "react";
+
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Alert,
 } from "react-native";
 
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -16,10 +16,10 @@ import { router } from "expo-router";
 import { colors, fonts } from "../constants/theme";
 import BottomNav from "../components/BottomNav";
 import { testApiConnection } from "../constants/apiTest";
+
 import {
   getAuthToken,
   getAuthUser,
-  clearAuthSession,
 } from "../constants/auth";
 
 export default function Home() {
@@ -50,50 +50,10 @@ export default function Home() {
     }
   };
 
-  // Logout patient account
-  const handleLogout = () => {
-    Alert.alert(
-      "Logout",
-      "Are you sure you want to logout?",
-      [
-        {
-          text: "Cancel",
-          style: "cancel",
-        },
-        {
-          text: "Logout",
-          style: "destructive",
-          onPress: async () => {
-            await clearAuthSession();
-            setUser(null);
-
-            Alert.alert(
-              "Logged Out",
-              "You have successfully logged out."
-            );
-          },
-        },
-      ]
-    );
-  };
-
   // Open token page only for logged-in patients
   const handleGetToken = () => {
     if (!user) {
-      Alert.alert(
-        "Login Required",
-        "Please login to your account before getting a digital token.",
-        [
-          {
-            text: "Cancel",
-            style: "cancel",
-          },
-          {
-            text: "Login",
-            onPress: () => router.push("/login"),
-          },
-        ]
-      );
+      router.push("/login");
       return;
     }
 
@@ -146,6 +106,7 @@ export default function Home() {
                       <Text style={styles.accountWelcome}>
                         Welcome back,
                       </Text>
+
                       <Text style={styles.accountName} numberOfLines={1}>
                         {user.name || "Patient"}
                       </Text>
@@ -156,23 +117,29 @@ export default function Home() {
                     <TouchableOpacity
                       style={styles.profileButton}
                       onPress={() => router.push("/profile-settings")}
+                      activeOpacity={0.8}
                     >
                       <Ionicons
                         name="person-outline"
                         size={15}
                         color={colors.primary}
                       />
-                      <Text style={styles.profileButtonText}>Profile</Text>
+
+                      <Text style={styles.profileButtonText}>
+                        Profile
+                      </Text>
                     </TouchableOpacity>
 
+                    {/* Settings Button */}
                     <TouchableOpacity
-                      style={styles.logoutButton}
-                      onPress={handleLogout}
+                      style={styles.settingsButton}
+                      onPress={() => router.push("/settings")}
+                      activeOpacity={0.8}
                     >
                       <Ionicons
-                        name="log-out-outline"
-                        size={16}
-                        color={colors.danger}
+                        name="settings-outline"
+                        size={18}
+                        color={colors.primary}
                       />
                     </TouchableOpacity>
                   </View>
@@ -192,6 +159,7 @@ export default function Home() {
                       <Text style={styles.accountWelcome}>
                         Welcome, Guest!
                       </Text>
+
                       <Text style={styles.accountName}>
                         Login to your account
                       </Text>
@@ -203,6 +171,7 @@ export default function Home() {
                     onPress={() => router.push("/login")}
                   >
                     <Text style={styles.loginButtonText}>Login</Text>
+
                     <Ionicons
                       name="arrow-forward"
                       size={16}
@@ -224,7 +193,9 @@ export default function Home() {
 
               <Text style={styles.welcomeTitle}>
                 Skip the waiting.{"\n"}
-                <Text style={styles.greenText}>Manage your time.</Text>
+                <Text style={styles.greenText}>
+                  Manage your time.
+                </Text>
               </Text>
 
               <Text style={styles.welcomeDescription}>
@@ -233,7 +204,11 @@ export default function Home() {
             </View>
 
             <View style={styles.pulseCircle}>
-              <Ionicons name="pulse" size={34} color={colors.primary} />
+              <Ionicons
+                name="pulse"
+                size={34}
+                color={colors.primary}
+              />
             </View>
           </View>
 
@@ -252,7 +227,10 @@ export default function Home() {
             </View>
 
             <View style={styles.tokenTextContainer}>
-              <Text style={styles.tokenTitle}>Get Digital Token</Text>
+              <Text style={styles.tokenTitle}>
+                Get Digital Token
+              </Text>
+
               <Text style={styles.tokenSubtitle}>
                 Join a hospital queue
               </Text>
@@ -369,6 +347,7 @@ export default function Home() {
               </View>
 
               <Text style={styles.quickTitle}>Live Queue</Text>
+
               <Text style={styles.quickSubtitle}>
                 View current queue
               </Text>
@@ -396,6 +375,7 @@ export default function Home() {
               </View>
 
               <Text style={styles.quickTitle}>Alerts</Text>
+
               <Text style={styles.quickSubtitle}>
                 Queue updates
               </Text>
@@ -547,11 +527,12 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bold,
   },
 
-  logoutButton: {
+  // Settings button
+  settingsButton: {
     width: 35,
     height: 35,
     borderRadius: 10,
-    backgroundColor: colors.dangerLight,
+    backgroundColor: colors.primaryLight,
     alignItems: "center",
     justifyContent: "center",
   },

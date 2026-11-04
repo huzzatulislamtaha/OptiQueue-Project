@@ -1,5 +1,5 @@
-
 import React, { useState } from "react";
+
 import {
   View,
   Text,
@@ -10,7 +10,6 @@ import {
   Platform,
   ScrollView,
   ActivityIndicator,
-  Alert,
 } from "react-native";
 
 import { router } from "expo-router";
@@ -19,19 +18,63 @@ import { Ionicons } from "@expo/vector-icons";
 import { colors, fonts } from "../constants/theme";
 import { API_BASE_URL, API_ENDPOINTS } from "../constants/api";
 import { saveAuthSession } from "../constants/auth";
+import CustomAlert from "../components/CustomAlert";
 
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Custom popup state
+  const [alertVisible, setAlertVisible] = useState(false);
+  const [alertType, setAlertType] = useState("info");
+  const [alertTitle, setAlertTitle] = useState("");
+  const [alertMessage, setAlertMessage] = useState("");
+  const [alertButtonText, setAlertButtonText] = useState("OK");
+  const [alertAction, setAlertAction] = useState(null);
+
+  // Show custom popup
+  const showCustomAlert = (
+    type,
+    title,
+    message,
+    buttonText = "OK",
+    action = null
+  ) => {
+    setAlertType(type);
+    setAlertTitle(title);
+    setAlertMessage(message);
+    setAlertButtonText(buttonText);
+    setAlertAction(() => action);
+    setAlertVisible(true);
+  };
+
+  // Close custom popup
+  const closeCustomAlert = () => {
+    setAlertVisible(false);
+    setAlertAction(null);
+  };
+
+  // Handle popup button press
+  const handleAlertPress = () => {
+    const action = alertAction;
+
+    closeCustomAlert();
+
+    if (action) {
+      action();
+    }
+  };
 
   // Login API connection
   const handleLogin = async () => {
     if (!email.trim() || !password) {
-      Alert.alert(
+      showCustomAlert(
+        "warning",
         "Missing Information",
-        "Please enter your email and password."
+        "Please enter your email address and password."
       );
       return;
     }
@@ -53,11 +96,18 @@ export default function LoginScreen() {
         }
       );
 
-      const data = await response.json();
+      let data;
+
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error("Invalid response received from server.");
+      }
 
       // Check API response
       if (!response.ok || !data.success) {
-        Alert.alert(
+        showCustomAlert(
+          "error",
           "Login Failed",
           data.message || "Invalid email or password."
         );
@@ -66,7 +116,8 @@ export default function LoginScreen() {
 
       // Check patient role
       if (data.user?.role !== "patient") {
-        Alert.alert(
+        showCustomAlert(
+          "error",
           "Access Denied",
           "This account is not a patient account."
         );
@@ -75,7 +126,8 @@ export default function LoginScreen() {
 
       // Check JWT token
       if (!data.token) {
-        Alert.alert(
+        showCustomAlert(
+          "error",
           "Login Error",
           "Authentication token was not received from the server."
         );
@@ -89,7 +141,8 @@ export default function LoginScreen() {
       );
 
       if (!saveSuccess) {
-        Alert.alert(
+        showCustomAlert(
+          "error",
           "Session Error",
           "Failed to save login session. Please try again."
         );
@@ -97,22 +150,34 @@ export default function LoginScreen() {
       }
 
       // Login successful
-      Alert.alert("Success", "Login successful!", [
-        {
-          text: "Continue",
-          onPress: () => router.replace("/"),
-        },
-      ]);
+      showCustomAlert(
+        "success",
+        "Login Successful!",
+        `Welcome back, ${data.user.name || "Patient"}! You are now logged in.`,
+        "Continue",
+        () => router.replace("/")
+      );
     } catch (error) {
-      Alert.alert(
+      showCustomAlert(
+        "error",
         "Connection Error",
-        "Unable to connect to the server. Please try again."
+        "Unable to connect to the server. Please check your internet connection and try again."
       );
 
       console.log("Login Error:", error.message);
     } finally {
       setLoading(false);
     }
+  };
+
+  // Forgot Password
+  // Backend password reset API is not implemented yet.
+  const handleForgotPassword = () => {
+    showCustomAlert(
+      "info",
+      "Forgot Password?",
+      "Password reset is not available yet. Please contact the hospital administrator for assistance."
+    );
   };
 
   return (
@@ -190,10 +255,12 @@ export default function LoginScreen() {
               onChangeText={setPassword}
               secureTextEntry={!showPassword}
               autoCapitalize="none"
+              autoCorrect={false}
             />
 
             <TouchableOpacity
               onPress={() => setShowPassword(!showPassword)}
+              activeOpacity={0.7}
             >
               <Ionicons
                 name={
@@ -206,6 +273,17 @@ export default function LoginScreen() {
               />
             </TouchableOpacity>
           </View>
+
+          {/* Forgot Password */}
+          <TouchableOpacity
+            style={styles.forgotPasswordContainer}
+            onPress={handleForgotPassword}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.forgotPasswordText}>
+              Forgot Password?
+            </Text>
+          </TouchableOpacity>
 
           {/* Login Button */}
           <TouchableOpacity
@@ -255,6 +333,17 @@ export default function LoginScreen() {
           Your health journey, managed smarter.
         </Text>
       </ScrollView>
+
+      {/* Custom Alert Popup */}
+      <CustomAlert
+        visible={alertVisible}
+        type={alertType}
+        title={alertTitle}
+        message={alertMessage}
+        buttonText={alertButtonText}
+        onPress={handleAlertPress}
+        onClose={closeCustomAlert}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -351,11 +440,23 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
 
+  forgotPasswordContainer: {
+    alignSelf: "flex-end",
+    marginTop: 13,
+    paddingVertical: 4,
+  },
+
+  forgotPasswordText: {
+    color: colors.primary,
+    fontSize: 13,
+    fontFamily: fonts.semiBold,
+  },
+
   loginButton: {
     height: 54,
     backgroundColor: colors.primary,
     borderRadius: 11,
-    marginTop: 30,
+    marginTop: 24,
     flexDirection: "row",
     justifyContent: "center",
     alignItems: "center",

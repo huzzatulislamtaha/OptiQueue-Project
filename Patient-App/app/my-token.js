@@ -1,3 +1,4 @@
+
 import React from "react";
 import {
   View,
@@ -6,23 +7,229 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
+  ActivityIndicator,
 } from "react-native";
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import BottomNav from "../components/BottomNav";
 import { colors, fonts } from "../constants/theme";
+import { API_BASE_URL, API_ENDPOINTS } from "../constants/api";
+import { getAuthToken } from "../constants/auth";
 
 export default function MyToken() {
   const params = useLocalSearchParams();
 
-  const token = params.token || "A-027";
-  const service = params.service || "General Consultation";
-  const wait = params.wait || "18 min";
+  // Navigation থেকে পাওয়া Token Information
+  const paramToken = Array.isArray(params.token)
+    ? params.token[0]
+    : params.token;
 
+  const paramTokenId = Array.isArray(params.tokenId)
+    ? params.tokenId[0]
+    : params.tokenId;
+
+  const paramService = Array.isArray(params.service)
+    ? params.service[0]
+    : params.service;
+
+  const paramWait = Array.isArray(params.wait)
+    ? params.wait[0]
+    : params.wait;
+
+  // States
+  const [myTokens, setMyTokens] = React.useState([]);
+  const [liveQueues, setLiveQueues] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [refreshing, setRefreshing] = React.useState(false);
   const [cancelled, setCancelled] = React.useState(false);
+  const [cancelling, setCancelling] = React.useState(false);
 
+  // Selected Token
+  const selectedToken = React.useMemo(() => {
+    if (!myTokens.length) return null;
+
+    if (paramTokenId) {
+      const matchedById = myTokens.find(
+        (item) => String(item.id) === String(paramTokenId)
+      );
+
+      if (matchedById) return matchedById;
+    }
+
+    if (paramToken) {
+      const matchedByNumber = myTokens.find(
+        (item) => item.token_number === paramToken
+      );
+
+      if (matchedByNumber) return matchedByNumber;
+    }
+
+    // Navigation parameter না থাকলে সর্বশেষ Token
+    return myTokens[0];
+  }, [myTokens, paramToken, paramTokenId]);
+
+  // Fetch My Tokens and Live Queue
+  const fetchTokenData = React.useCallback(async (showLoader = false) => {
+    try {
+      if (showLoader) setRefreshing(true);
+
+      const authToken = await getAuthToken();
+
+      if (!authToken) {
+        console.log("MY TOKEN ERROR: Authentication token not found.");
+        return;
+      }
+
+      const headers = {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      };
+
+      // দুইটি API একসঙ্গে Call করা
+      const [myTokenResponse, liveQueueResponse] = await Promise.all([
+        fetch(
+          `${API_BASE_URL}${API_ENDPOINTS.MY_TOKENS}`,
+          {
+            method: "GET",
+            headers,
+          }
+        ),
+
+        fetch(
+          `${API_BASE_URL}${API_ENDPOINTS.LIVE_QUEUE}`,
+          {
+            method: "GET",
+            headers,
+          }
+        ),
+      ]);
+
+      const myTokenData = await myTokenResponse.json();
+      const liveQueueData = await liveQueueResponse.json();
+
+      console.log("MY TOKENS RESPONSE:", myTokenData);
+      console.log("LIVE QUEUE RESPONSE:", liveQueueData);
+
+      if (!myTokenResponse.ok || !myTokenData.success) {
+        throw new Error(
+          myTokenData.message || "Failed to load your tokens."
+        );
+      }
+
+      if (!liveQueueResponse.ok || !liveQueueData.success) {
+        throw new Error(
+          liveQueueData.message || "Failed to load live queue."
+        );
+      }
+
+      setMyTokens(
+        Array.isArray(myTokenData.tokens)
+          ? myTokenData.tokens
+          : []
+      );
+
+      setLiveQueues(
+        Array.isArray(liveQueueData.queues)
+          ? liveQueueData.queues
+          : []
+      );
+    } catch (error) {
+      console.log("MY TOKEN FETCH ERROR:", error.message);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  // Initial Fetch and Automatic Refresh
+  React.useEffect(() => {
+    fetchTokenData();
+
+    const interval = setInterval(() => {
+      fetchTokenData();
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [fetchTokenData]);
+
+  // Find Current Service Queue
+  const serviceId = selectedToken?.service_id;
+
+  const currentQueue = liveQueues.find(
+    (queue) => String(queue.serviceId) === String(serviceId)
+  );
+
+  // Current Token Information
+  const token = selectedToken?.token_number || paramToken || "Loading...";
+  const service =
+    currentQueue?.service ||
+    selectedToken?.services?.name ||
+    (Array.isArray(selectedToken?.services)
+      ? selectedToken.services[0]?.name
+      : null) ||
+    paramService ||
+    "General Consultation";
+
+  const tokenStatus = selectedToken?.status || "waiting";
+
+  // Find Own Position from Live Queue
+  const waitingList = currentQueue?.waiting || [];
+
+  const liveToken = waitingList.find(
+    (item) =>
+      String(item.id) === String(selectedToken?.id) ||
+      item.token === token
+  );
+
+  const queuePosition =
+    liveToken?.queuePosition ??
+    selectedToken?.queue_position ??
+    "—";
+
+  // Currently Serving Token
+  const nowServing = currentQueue?.nowServing;
+
+  const servingToken =
+    typeof nowServing === "string"
+      ? nowServing
+      : nowServing?.token ||
+        nowServing?.token_number ||
+        "—";
+
+  // Estimated Wait
+  const estimatedWait =
+    selectedToken?.services?.estimated_wait_minutes ??
+    paramWait ??
+    "—";
+
+  const waitText =
+    typeof estimatedWait === "number"
+      ? `${estimatedWait * (Number(queuePosition) || 0)} min`
+      : String(estimatedWait).includes("min")
+        ? estimatedWait
+        : estimatedWait === "—"
+          ? "—"
+          : `${estimatedWait} min`;
+
+  // Status Formatting
+  const displayStatus = cancelled
+    ? "CANCELLED"
+    : String(tokenStatus).toUpperCase();
+
+  const isActive =
+    !cancelled &&
+    ["waiting", "serving"].includes(
+      String(tokenStatus).toLowerCase()
+    );
+
+  // Cancel Token API
   const handleCancelToken = () => {
+    if (!selectedToken?.id) {
+      Alert.alert("Error", "Token information not found.");
+      return;
+    }
+
     Alert.alert(
       "Cancel Token",
       `Are you sure you want to cancel token ${token}?`,
@@ -34,13 +241,102 @@ export default function MyToken() {
         {
           text: "Cancel Token",
           style: "destructive",
-          onPress: () => {
-            setCancelled(true);
+          onPress: async () => {
+            try {
+              setCancelling(true);
+
+              const authToken = await getAuthToken();
+
+              const response = await fetch(
+                `${API_BASE_URL}${API_ENDPOINTS.CREATE_TOKEN}/${selectedToken.id}/cancel`,
+                {
+                  method: "PATCH",
+                  headers: {
+                    Authorization: `Bearer ${authToken}`,
+                    "Content-Type": "application/json",
+                  },
+                }
+              );
+
+              const data = await response.json();
+
+              console.log("CANCEL TOKEN RESPONSE:", data);
+
+              if (!response.ok || !data.success) {
+                throw new Error(
+                  data.message || "Unable to cancel token."
+                );
+              }
+
+              setCancelled(true);
+
+              Alert.alert(
+                "Success",
+                "Your token has been cancelled successfully."
+              );
+
+              fetchTokenData();
+            } catch (error) {
+              console.log("CANCEL TOKEN ERROR:", error.message);
+
+              Alert.alert(
+                "Cancel Failed",
+                error.message || "Something went wrong."
+              );
+            } finally {
+              setCancelling(false);
+            }
           },
         },
       ]
     );
   };
+
+  // Loading Screen
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator
+            size="large"
+            color={colors.primary}
+          />
+          <Text style={styles.loadingText}>
+            Loading your token...
+          </Text>
+        </View>
+        <BottomNav />
+      </SafeAreaView>
+    );
+  }
+
+  // No Token Found
+  if (!selectedToken) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingContainer}>
+          <Ionicons
+            name="ticket-outline"
+            size={45}
+            color={colors.textMuted}
+          />
+          <Text style={styles.loadingText}>
+            No token found.
+          </Text>
+
+          <TouchableOpacity
+            style={styles.newTokenButton}
+            onPress={() => router.push("/get-token")}
+          >
+            <Text style={styles.newTokenButtonText}>
+              Get New Token
+            </Text>
+          </TouchableOpacity>
+        </View>
+        <BottomNav />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -50,7 +346,11 @@ export default function MyToken() {
         <View style={styles.header}>
           <TouchableOpacity
             style={styles.backButton}
-            onPress={() => router.canGoBack() ? router.back() : router.replace("/")}
+            onPress={() =>
+              router.canGoBack()
+                ? router.back()
+                : router.replace("/")
+            }
             activeOpacity={0.8}
           >
             <Ionicons
@@ -68,32 +368,48 @@ export default function MyToken() {
                 : "Your active queue token"}
             </Text>
           </View>
+
+          <TouchableOpacity
+            onPress={() => fetchTokenData(true)}
+            disabled={refreshing}
+          >
+            <Ionicons
+              name="refresh-outline"
+              size={23}
+              color={colors.primary}
+            />
+          </TouchableOpacity>
         </View>
 
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.content}
         >
+
           {/* Status */}
           <View
             style={[
               styles.statusRow,
-              cancelled && styles.cancelledStatusRow,
+              (cancelled || tokenStatus === "cancelled") &&
+                styles.cancelledStatusRow,
             ]}
           >
             <View
               style={[
                 styles.statusDot,
-                cancelled && styles.cancelledDot,
+                (cancelled || tokenStatus === "cancelled") &&
+                  styles.cancelledDot,
               ]}
             />
+
             <Text
               style={[
                 styles.statusText,
-                cancelled && styles.cancelledStatusText,
+                (cancelled || tokenStatus === "cancelled") &&
+                  styles.cancelledStatusText,
               ]}
             >
-              {cancelled ? "CANCELLED" : "WAITING"}
+              {displayStatus}
             </Text>
           </View>
 
@@ -101,16 +417,19 @@ export default function MyToken() {
           <View
             style={[
               styles.tokenCard,
-              cancelled && styles.cancelledTokenCard,
+              (cancelled || tokenStatus === "cancelled") &&
+                styles.cancelledTokenCard,
             ]}
           >
             <View style={styles.tokenTopRow}>
               <View>
                 <Text style={styles.tokenLabel}>YOUR TOKEN</Text>
+
                 <Text
                   style={[
                     styles.tokenNumber,
-                    cancelled && styles.cancelledTokenNumber,
+                    (cancelled || tokenStatus === "cancelled") &&
+                      styles.cancelledTokenNumber,
                   ]}
                 >
                   {token}
@@ -120,13 +439,18 @@ export default function MyToken() {
               <View
                 style={[
                   styles.tokenIcon,
-                  cancelled && styles.cancelledTokenIcon,
+                  (cancelled || tokenStatus === "cancelled") &&
+                    styles.cancelledTokenIcon,
                 ]}
               >
                 <Ionicons
                   name="ticket-outline"
                   size={25}
-                  color={cancelled ? colors.cancelledIcon : colors.primary}
+                  color={
+                    cancelled || tokenStatus === "cancelled"
+                      ? colors.cancelledIcon
+                      : colors.primary
+                  }
                 />
               </View>
             </View>
@@ -137,12 +461,13 @@ export default function MyToken() {
             <Text style={styles.serviceName}>{service}</Text>
           </View>
 
-          {!cancelled ? (
+          {isActive ? (
             <>
               {/* Queue Status */}
               <Text style={styles.sectionTitle}>Queue Status</Text>
 
               <View style={styles.queueCard}>
+
                 {/* Position */}
                 <View style={styles.queueItem}>
                   <View style={styles.iconBox}>
@@ -152,9 +477,16 @@ export default function MyToken() {
                       color={colors.primary}
                     />
                   </View>
+
                   <View>
-                    <Text style={styles.queueLabel}>YOUR POSITION</Text>
-                    <Text style={styles.queueValue}>#06</Text>
+                    <Text style={styles.queueLabel}>
+                      YOUR POSITION
+                    </Text>
+                    <Text style={styles.queueValue}>
+                      {queuePosition === "—"
+                        ? "—"
+                        : `#${queuePosition}`}
+                    </Text>
                   </View>
                 </View>
 
@@ -169,9 +501,12 @@ export default function MyToken() {
                       color={colors.primary}
                     />
                   </View>
+
                   <View>
                     <Text style={styles.queueLabel}>EST. WAIT</Text>
-                    <Text style={styles.queueValue}>{wait}</Text>
+                    <Text style={styles.queueValue}>
+                      {tokenStatus === "serving" ? "Now" : waitText}
+                    </Text>
                   </View>
                 </View>
               </View>
@@ -187,8 +522,13 @@ export default function MyToken() {
                 </View>
 
                 <View style={styles.servingInfo}>
-                  <Text style={styles.servingLabel}>CURRENTLY SERVING</Text>
-                  <Text style={styles.servingToken}>A-021</Text>
+                  <Text style={styles.servingLabel}>
+                    CURRENTLY SERVING
+                  </Text>
+
+                  <Text style={styles.servingToken}>
+                    {servingToken}
+                  </Text>
                 </View>
 
                 <View style={styles.liveBadge}>
@@ -206,6 +546,7 @@ export default function MyToken() {
                     color={colors.primary}
                   />
                 </View>
+
                 <Text style={styles.messageText}>
                   Please stay nearby. Your queue position updates
                   automatically.
@@ -218,7 +559,10 @@ export default function MyToken() {
                 activeOpacity={0.85}
                 onPress={() => router.push("/queue")}
               >
-                <Text style={styles.queueButtonText}>View Live Queue</Text>
+                <Text style={styles.queueButtonText}>
+                  View Live Queue
+                </Text>
+
                 <View style={styles.queueButtonIcon}>
                   <Ionicons
                     name="arrow-forward"
@@ -228,30 +572,45 @@ export default function MyToken() {
                 </View>
               </TouchableOpacity>
 
-              <TouchableOpacity
-                style={styles.cancelButton}
-                activeOpacity={0.8}
-                onPress={handleCancelToken}
-              >
-                <Text style={styles.cancelText}>Cancel Token</Text>
-              </TouchableOpacity>
+              {tokenStatus === "waiting" && (
+                <TouchableOpacity
+                  style={styles.cancelButton}
+                  activeOpacity={0.8}
+                  onPress={handleCancelToken}
+                  disabled={cancelling}
+                >
+                  <Text style={styles.cancelText}>
+                    {cancelling ? "Cancelling..." : "Cancel Token"}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </>
           ) : (
             <>
-              {/* Cancelled Message */}
+              {/* Cancelled / Completed Message */}
               <View style={styles.cancelledMessageCard}>
                 <View style={styles.cancelledIcon}>
                   <Ionicons
-                    name="close-circle-outline"
+                    name={
+                      tokenStatus === "completed"
+                        ? "checkmark-circle-outline"
+                        : "close-circle-outline"
+                    }
                     size={29}
                     color={colors.danger}
                   />
                 </View>
 
-                <Text style={styles.cancelledTitle}>Token Cancelled</Text>
+                <Text style={styles.cancelledTitle}>
+                  {cancelled || tokenStatus === "cancelled"
+                    ? "Token Cancelled"
+                    : "Token Completed"}
+                </Text>
+
                 <Text style={styles.cancelledMessage}>
-                  Your token has been cancelled successfully. You can get a
-                  new digital token whenever you need one.
+                  {tokenStatus === "completed"
+                    ? "Your queue service has been completed."
+                    : "Your token is no longer active. You can get a new digital token whenever you need one."}
                 </Text>
               </View>
 
@@ -266,18 +625,18 @@ export default function MyToken() {
                   size={20}
                   color={colors.white}
                 />
-                <Text style={styles.newTokenButtonText}>Get New Token</Text>
+
+                <Text style={styles.newTokenButtonText}>
+                  Get New Token
+                </Text>
               </TouchableOpacity>
             </>
           )}
 
-          {/* Space for Bottom Navigation */}
           <View style={{ height: 30 }} />
         </ScrollView>
 
-        {/* Permanent Bottom Navigation */}
         <BottomNav />
-
       </View>
     </SafeAreaView>
   );
@@ -292,6 +651,20 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+
+  loadingContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+
+  loadingText: {
+    color: colors.textMuted,
+    fontSize: 13,
+    marginTop: 12,
+    fontFamily: fonts.regular,
   },
 
   header: {
@@ -676,6 +1049,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: 15,
     gap: 9,
+    paddingHorizontal: 20,
   },
 
   newTokenButtonText: {

@@ -1,18 +1,44 @@
-import React, { useState } from "react";
+
+import React, { useEffect, useState } from "react";
+
 import {
   View,
   Text,
   Pressable,
   ScrollView,
+  Alert,
+  ActivityIndicator,
 } from "react-native";
+
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
+
 import BottomNav from "../components/BottomNav";
+
 import { colors, fonts } from "../constants/theme";
+
+import {
+  getAuthToken,
+  getAuthUser,
+  clearAuthSession,
+} from "../constants/auth";
+
+import {
+  API_BASE_URL,
+  API_ENDPOINTS,
+} from "../constants/api";
+
+// ========================================
+// Settings Row Component
+// ========================================
 
 function SettingRow({ icon, title, subtitle, onPress, right }) {
   return (
-    <Pressable style={styles.row} onPress={onPress}>
+    <Pressable
+      style={styles.row}
+      onPress={onPress}
+      disabled={!onPress && !right}
+    >
       <View style={styles.rowIcon}>
         <Ionicons name={icon} size={19} color={colors.primary} />
       </View>
@@ -33,8 +59,215 @@ function SettingRow({ icon, title, subtitle, onPress, right }) {
   );
 }
 
+// ========================================
+// Settings Screen
+// ========================================
+
 export default function Settings() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  // ========================================
+  // Load Logged-in User Information
+  // ========================================
+
+  useEffect(() => {
+    loadUserInformation();
+  }, []);
+
+  const loadUserInformation = async () => {
+    try {
+      const token = await getAuthToken();
+      const savedUser = await getAuthUser();
+
+      if (token && savedUser && savedUser.role === "patient") {
+        setUser(savedUser);
+      } else {
+        setUser(null);
+      }
+    } catch (error) {
+      console.log("Settings User Loading Error:", error.message);
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ========================================
+  // Logout Confirmation
+  // ========================================
+
+  const handleLogout = () => {
+    Alert.alert(
+      "Logout",
+      "Are you sure you want to logout from your OptiQueue account?",
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: "Logout",
+          style: "destructive",
+          onPress: confirmLogout,
+        },
+      ]
+    );
+  };
+
+  // ========================================
+  // Secure Logout
+  // ========================================
+
+  const confirmLogout = async () => {
+    if (loggingOut) {
+      return;
+    }
+
+    setLoggingOut(true);
+
+    let serverLogoutSuccessful = false;
+
+    try {
+      // Get current authentication token
+      const token = await getAuthToken();
+
+      // Revoke JWT session from backend
+      if (token) {
+        try {
+          // ========================================
+          // DEBUG LOGS (Temporarily Disabled)
+          // ========================================
+
+          // Debug 1: Show only token prefix, never the full JWT.
+          // Enable when needed for logout debugging.
+          // console.log(
+          //   "LOGOUT REQUEST TOKEN PREFIX:",
+          //   token.substring(0, 8)
+          // );
+
+          // Debug 2: Show logout API URL.
+          // console.log(
+          //   "LOGOUT API URL:",
+          //   `${API_BASE_URL}${API_ENDPOINTS.LOGOUT}`
+          // );
+
+          const response = await fetch(
+            `${API_BASE_URL}${API_ENDPOINTS.LOGOUT}`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: "application/json",
+                "Content-Type": "application/json",
+              },
+            }
+          );
+
+          const result = await response.json();
+
+          // Debug 3: Show backend response.
+          // console.log(
+          //   "LOGOUT API RESPONSE:",
+          //   response.status,
+          //   result
+          // );
+
+          // Successful server-side logout
+          if (response.ok && result.success) {
+            serverLogoutSuccessful = true;
+
+            // Debug 4: Backend logout confirmation.
+            // console.log("Backend session revoked successfully.");
+          }
+
+          // A previously revoked or expired session
+          // does not need another successful revocation.
+          if (
+            response.status === 401 &&
+            result.message
+          ) {
+            serverLogoutSuccessful = true;
+
+            // Debug: Session already invalid.
+            // console.log("Session is already invalid.");
+          }
+
+          if (!response.ok && response.status !== 401) {
+            console.log(
+              "Backend Logout Error:",
+              result.message || "Server logout failed."
+            );
+          }
+        } catch (networkError) {
+          console.log(
+            "Backend Logout Network Error:",
+            networkError.message
+          );
+        }
+      } else {
+        console.log("LOGOUT ERROR: No authentication token found.");
+      }
+
+      // Always clear local session
+      const cleared = await clearAuthSession();
+
+      if (!cleared) {
+        throw new Error("Unable to clear local login session.");
+      }
+
+      // Debug 5: Local session cleared confirmation.
+      // console.log("Local authentication session cleared.");
+
+      setUser(null);
+
+      // Navigate to Login Screen
+      router.replace("/login");
+
+      // Inform user if backend could not be reached
+      if (!serverLogoutSuccessful && token) {
+        setTimeout(() => {
+          Alert.alert(
+            "Logged Out",
+            "Your device session has been cleared, but the server could not confirm session revocation. Please connect to the internet."
+          );
+        }, 300);
+      }
+
+    } catch (error) {
+      console.log("Logout Error:", error.message);
+
+      Alert.alert(
+        "Logout Failed",
+        "Unable to clear your login session. Please try again."
+      );
+
+    } finally {
+      setLoggingOut(false);
+    }
+  };
+
+  // ========================================
+  // Loading Screen
+  // ========================================
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator
+          size="large"
+          color={colors.primary}
+        />
+      </View>
+    );
+  }
+
+  // ========================================
+  // Main Settings Screen
+  // ========================================
 
   return (
     <View style={styles.screen}>
@@ -42,11 +275,17 @@ export default function Settings() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
       >
+
         {/* HEADER */}
+
         <View style={styles.header}>
           <Pressable
             style={styles.backButton}
-            onPress={() => router.canGoBack() ? router.back() : router.replace("/")}
+            onPress={() =>
+              router.canGoBack()
+                ? router.back()
+                : router.replace("/")
+            }
           >
             <Ionicons
               name="arrow-back"
@@ -56,7 +295,10 @@ export default function Settings() {
           </Pressable>
 
           <View style={styles.headerText}>
-            <Text style={styles.headerTitle}>Settings</Text>
+            <Text style={styles.headerTitle}>
+              Settings
+            </Text>
+
             <Text style={styles.headerSubtitle}>
               App preferences & information
             </Text>
@@ -72,21 +314,34 @@ export default function Settings() {
         </View>
 
         {/* USER CARD */}
+
         <Pressable
           style={styles.userCard}
           onPress={() => router.push("/profile-settings")}
         >
           <View style={styles.avatar}>
-            <Ionicons name="person" size={24} color={colors.primary} />
+            <Ionicons
+              name="person"
+              size={24}
+              color={colors.primary}
+            />
           </View>
 
           <View style={styles.userInfo}>
-            <Text style={styles.userName}>Patient User</Text>
-            <Text style={styles.userType}>Patient Account</Text>
+            <Text style={styles.userName}>
+              {user?.name || "Patient User"}
+            </Text>
+
+            <Text style={styles.userType}>
+              {user?.email || "Patient Account"}
+            </Text>
 
             <View style={styles.digitalBadge}>
               <View style={styles.badgeDot} />
-              <Text style={styles.badgeText}>DIGITAL QUEUE</Text>
+
+              <Text style={styles.badgeText}>
+                DIGITAL QUEUE
+              </Text>
             </View>
           </View>
 
@@ -98,7 +353,10 @@ export default function Settings() {
         </Pressable>
 
         {/* PREFERENCES */}
-        <Text style={styles.sectionTitle}>Preferences</Text>
+
+        <Text style={styles.sectionTitle}>
+          Preferences
+        </Text>
 
         <View style={styles.sectionCard}>
           <SettingRow
@@ -109,10 +367,14 @@ export default function Settings() {
                 ? "Queue updates enabled"
                 : "Queue updates disabled"
             }
-            onPress={() => setNotificationsEnabled((prev) => !prev)}
+            onPress={() =>
+              setNotificationsEnabled((prev) => !prev)
+            }
             right={
               <Pressable
-                onPress={() => setNotificationsEnabled((prev) => !prev)}
+                onPress={() =>
+                  setNotificationsEnabled((prev) => !prev)
+                }
                 style={[
                   styles.switchTrack,
                   notificationsEnabled
@@ -134,7 +396,10 @@ export default function Settings() {
         </View>
 
         {/* APP INFORMATION */}
-        <Text style={styles.sectionTitle}>App Information</Text>
+
+        <Text style={styles.sectionTitle}>
+          App Information
+        </Text>
 
         <View style={styles.sectionCard}>
           <SettingRow
@@ -161,14 +426,19 @@ export default function Settings() {
             subtitle="OptiQueue mobile application"
             right={
               <View style={styles.versionBadge}>
-                <Text style={styles.versionText}>v1.0.0</Text>
+                <Text style={styles.versionText}>
+                  v1.0.0
+                </Text>
               </View>
             }
           />
         </View>
 
         {/* SUPPORT */}
-        <Text style={styles.sectionTitle}>Support</Text>
+
+        <Text style={styles.sectionTitle}>
+          Support
+        </Text>
 
         <View style={styles.sectionCard}>
           <SettingRow
@@ -178,6 +448,60 @@ export default function Settings() {
             onPress={() => router.push("/help")}
           />
         </View>
+
+        {/* ACCOUNT */}
+
+        {user && (
+          <>
+            <Text style={styles.sectionTitle}>
+              Account
+            </Text>
+
+            <View style={styles.sectionCard}>
+              <Pressable
+                style={styles.logoutRow}
+                onPress={handleLogout}
+                disabled={loggingOut}
+              >
+                <View style={styles.logoutIcon}>
+                  <Ionicons
+                    name="log-out-outline"
+                    size={20}
+                    color={colors.danger}
+                  />
+                </View>
+
+                <View style={styles.rowText}>
+                  <Text style={styles.logoutTitle}>
+                    Logout
+                  </Text>
+
+                  <Text style={styles.rowSubtitle}>
+                    Sign out from your account
+                  </Text>
+                </View>
+
+                {loggingOut ? (
+                  <ActivityIndicator
+                    size="small"
+                    color={colors.danger}
+                  />
+                ) : (
+                  <Ionicons
+                    name="chevron-forward"
+                    size={17}
+                    color={colors.danger}
+                  />
+                )}
+              </Pressable>
+            </View>
+          </>
+        )}
+
+        <Text style={styles.footerText}>
+          OptiQueue v1.0.0
+        </Text>
+
       </ScrollView>
 
       <BottomNav />
@@ -185,10 +509,22 @@ export default function Settings() {
   );
 }
 
+// ========================================
+// Styles
+// ========================================
+
 const styles = {
+
   screen: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: colors.background,
+    alignItems: "center",
+    justifyContent: "center",
   },
 
   content: {
@@ -400,4 +736,38 @@ const styles = {
     color: colors.primary,
     fontFamily: fonts.semiBold,
   },
+
+  // Logout section
+
+  logoutRow: {
+    minHeight: 68,
+    paddingHorizontal: 13,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+
+  logoutIcon: {
+    width: 39,
+    height: 39,
+    borderRadius: 12,
+    backgroundColor: colors.dangerLight,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  logoutTitle: {
+    fontSize: 12,
+    color: colors.danger,
+    fontFamily: fonts.bold,
+  },
+
+  footerText: {
+    textAlign: "center",
+    fontSize: 9,
+    color: colors.textMuted,
+    fontFamily: fonts.regular,
+    marginTop: 2,
+    marginBottom: 15,
+  },
+
 };
