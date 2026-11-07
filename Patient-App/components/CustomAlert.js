@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef } from "react";
 
 import {
@@ -9,6 +10,7 @@ import {
   Animated,
   Pressable,
   BackHandler,
+  Platform,
 } from "react-native";
 
 import { Ionicons } from "@expo/vector-icons";
@@ -52,8 +54,9 @@ export default function CustomAlert({
   }, [visible, scaleAnim, opacityAnim]);
 
   // Android back button handling
+  // BackHandler is not supported on web
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || Platform.OS === "web") return;
 
     const backHandler = BackHandler.addEventListener(
       "hardwareBackPress",

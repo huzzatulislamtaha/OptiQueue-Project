@@ -8,6 +8,7 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
+  Platform,
 } from "react-native";
 
 import { Ionicons } from "@expo/vector-icons";
@@ -27,6 +28,35 @@ import {
   API_BASE_URL,
   API_ENDPOINTS,
 } from "../constants/api";
+
+// ========================================
+// Web Navigation Focus Fix
+// ========================================
+
+const blurWebFocus = () => {
+  if (Platform.OS === "web" && typeof document !== "undefined") {
+    const activeElement = document.activeElement;
+
+    if (activeElement && typeof activeElement.blur === "function") {
+      activeElement.blur();
+    }
+  }
+};
+
+const navigateWithBlur = (path) => {
+  blurWebFocus();
+  router.push(path);
+};
+
+const goBackWithBlur = () => {
+  blurWebFocus();
+
+  if (router.canGoBack()) {
+    router.back();
+  } else {
+    router.replace("/");
+  }
+};
 
 // ========================================
 // Settings Row Component
@@ -138,23 +168,6 @@ export default function Settings() {
       // Revoke JWT session from backend
       if (token) {
         try {
-          // ========================================
-          // DEBUG LOGS (Temporarily Disabled)
-          // ========================================
-
-          // Debug 1: Show only token prefix, never the full JWT.
-          // Enable when needed for logout debugging.
-          // console.log(
-          //   "LOGOUT REQUEST TOKEN PREFIX:",
-          //   token.substring(0, 8)
-          // );
-
-          // Debug 2: Show logout API URL.
-          // console.log(
-          //   "LOGOUT API URL:",
-          //   `${API_BASE_URL}${API_ENDPOINTS.LOGOUT}`
-          // );
-
           const response = await fetch(
             `${API_BASE_URL}${API_ENDPOINTS.LOGOUT}`,
             {
@@ -169,31 +182,14 @@ export default function Settings() {
 
           const result = await response.json();
 
-          // Debug 3: Show backend response.
-          // console.log(
-          //   "LOGOUT API RESPONSE:",
-          //   response.status,
-          //   result
-          // );
-
           // Successful server-side logout
           if (response.ok && result.success) {
             serverLogoutSuccessful = true;
-
-            // Debug 4: Backend logout confirmation.
-            // console.log("Backend session revoked successfully.");
           }
 
           // A previously revoked or expired session
-          // does not need another successful revocation.
-          if (
-            response.status === 401 &&
-            result.message
-          ) {
+          if (response.status === 401 && result.message) {
             serverLogoutSuccessful = true;
-
-            // Debug: Session already invalid.
-            // console.log("Session is already invalid.");
           }
 
           if (!response.ok && response.status !== 401) {
@@ -219,12 +215,10 @@ export default function Settings() {
         throw new Error("Unable to clear local login session.");
       }
 
-      // Debug 5: Local session cleared confirmation.
-      // console.log("Local authentication session cleared.");
-
       setUser(null);
 
       // Navigate to Login Screen
+      blurWebFocus();
       router.replace("/login");
 
       // Inform user if backend could not be reached
@@ -281,11 +275,7 @@ export default function Settings() {
         <View style={styles.header}>
           <Pressable
             style={styles.backButton}
-            onPress={() =>
-              router.canGoBack()
-                ? router.back()
-                : router.replace("/")
-            }
+            onPress={goBackWithBlur}
           >
             <Ionicons
               name="arrow-back"
@@ -317,7 +307,7 @@ export default function Settings() {
 
         <Pressable
           style={styles.userCard}
-          onPress={() => router.push("/profile-settings")}
+          onPress={() => navigateWithBlur("/profile-settings")}
         >
           <View style={styles.avatar}>
             <Ionicons
@@ -406,7 +396,7 @@ export default function Settings() {
             icon="information-circle-outline"
             title="About OptiQueue"
             subtitle="Smart hospital queue management"
-            onPress={() => router.push("/about")}
+            onPress={() => navigateWithBlur("/about")}
           />
 
           <View style={styles.rowDivider} />
@@ -415,7 +405,7 @@ export default function Settings() {
             icon="shield-checkmark-outline"
             title="Privacy & Security"
             subtitle="Your queue information is protected"
-            onPress={() => router.push("/privacy")}
+            onPress={() => navigateWithBlur("/privacy")}
           />
 
           <View style={styles.rowDivider} />
@@ -445,7 +435,7 @@ export default function Settings() {
             icon="help-circle-outline"
             title="Help & Support"
             subtitle="Need help using OptiQueue?"
-            onPress={() => router.push("/help")}
+            onPress={() => navigateWithBlur("/help")}
           />
         </View>
 

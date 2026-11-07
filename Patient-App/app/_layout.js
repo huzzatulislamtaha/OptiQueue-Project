@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   StyleSheet,
+  Platform,
 } from "react-native";
 
 import { useFonts } from "expo-font";
@@ -43,16 +44,9 @@ export default function RootLayout() {
   const router = useRouter();
   const segments = useSegments();
 
-  // Store the last detected token
   const lastTokenRef = useRef(null);
-
-  // Prevent multiple simultaneous API requests
   const verificationRef = useRef(false);
-
-  // Track verification requests to prevent stale results
   const verificationIdRef = useRef(0);
-
-  // Prevent duplicate navigation
   const navigationRef = useRef(null);
 
   const [authChecked, setAuthChecked] = useState(false);
@@ -90,19 +84,16 @@ export default function RootLayout() {
 
     verificationRef.current = true;
 
-    // Unique ID for this verification request
     const verificationId = ++verificationIdRef.current;
 
     try {
       const token = await getAuthToken();
 
-      // No saved token means user is logged out
       if (!token) {
         lastTokenRef.current = null;
 
         await clearAuthSession();
 
-        // Ignore stale verification results
         if (verificationId !== verificationIdRef.current) {
           return false;
         }
@@ -116,7 +107,6 @@ export default function RootLayout() {
 
       lastTokenRef.current = token;
 
-      // Request timeout
       const controller = new AbortController();
 
       const timeout = setTimeout(() => {
@@ -126,7 +116,6 @@ export default function RootLayout() {
       let response;
 
       try {
-        // Verify session with backend
         response = await fetch(
           API_BASE_URL + API_ENDPOINTS.ME,
           {
@@ -142,19 +131,16 @@ export default function RootLayout() {
         clearTimeout(timeout);
       }
 
-      // Ignore outdated verification responses
       if (verificationId !== verificationIdRef.current) {
         return false;
       }
 
-      // Check whether the token changed during API request
       const currentToken = await getAuthToken();
 
       if (currentToken !== token) {
         return false;
       }
 
-      // Invalid or expired token
       if (response.status === 401 || response.status === 403) {
         await clearAuthSession();
 
@@ -167,19 +153,16 @@ export default function RootLayout() {
         return false;
       }
 
-      // Other backend errors
       if (!response.ok) {
         throw new Error("Backend error: " + response.status);
       }
 
       const data = await response.json();
 
-      // Ignore outdated verification responses
       if (verificationId !== verificationIdRef.current) {
         return false;
       }
 
-      // Only patient accounts can access Patient App
       if (!data.success || data.user?.role !== "patient") {
         await clearAuthSession();
 
@@ -192,7 +175,6 @@ export default function RootLayout() {
         return false;
       }
 
-      // Check token again before saving session
       const latestToken = await getAuthToken();
 
       if (
@@ -202,10 +184,8 @@ export default function RootLayout() {
         return false;
       }
 
-      // Save updated user information
       await saveAuthSession(token, data.user);
 
-      // Final check after saving
       const savedToken = await getAuthToken();
 
       if (
@@ -224,14 +204,12 @@ export default function RootLayout() {
       return true;
 
     } catch (error) {
-      // Ignore outdated verification errors
       if (verificationId !== verificationIdRef.current) {
         return false;
       }
 
       console.log("Session Verification Error:", error.message);
 
-      // Keep saved session during temporary connection problems
       setIsAuthenticated(false);
       setServerOffline(true);
       setAuthChecked(true);
@@ -270,17 +248,13 @@ export default function RootLayout() {
           return;
         }
 
-        // Token has not changed
         if (currentToken === lastTokenRef.current) {
           return;
         }
 
-        // Update detected token
         lastTokenRef.current = currentToken;
 
-        // User logged out
         if (!currentToken) {
-          // Cancel any previous verification result
           verificationIdRef.current += 1;
 
           setIsAuthenticated(false);
@@ -300,7 +274,6 @@ export default function RootLayout() {
           return;
         }
 
-        // A new token was saved after login
         setAuthChecked(false);
 
         const result = await verifySession();
@@ -329,7 +302,6 @@ export default function RootLayout() {
       }
     };
 
-    // Check local session every 100 milliseconds
     const interval = setInterval(() => {
       checkSavedSession();
     }, 100);
@@ -350,7 +322,6 @@ export default function RootLayout() {
       return;
     }
 
-    // Do not navigate while backend is unavailable
     if (serverOffline) {
       return;
     }
@@ -361,13 +332,11 @@ export default function RootLayout() {
       currentScreen === "login" ||
       currentScreen === "register";
 
-    // Authenticated users should not stay on Login/Register
     if (isPublicScreen && isAuthenticated) {
       navigateTo("/");
       return;
     }
 
-    // Unauthenticated users cannot access private screens
     if (!isPublicScreen && !isAuthenticated) {
       navigateTo("/login");
     }
@@ -494,16 +463,18 @@ export default function RootLayout() {
         screenOptions={{
           headerShown: false,
 
-          // Modern Fade + Slide transition
-          animation: "fade_from_bottom",
+          animation:
+            Platform.OS === "web"
+              ? "none"
+              : "fade_from_bottom",
 
-          // Smooth animation duration
           animationDuration: 280,
 
-          // Enable swipe back gesture
-          gestureEnabled: true,
+          gestureEnabled: Platform.OS !== "web",
 
-          // Screen background
+          // Keep inactive screens attached on web
+          detachInactiveScreens: Platform.OS !== "web",
+
           contentStyle: {
             backgroundColor: colors.background,
           },

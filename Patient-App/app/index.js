@@ -7,6 +7,7 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  Platform,
 } from "react-native";
 
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -25,6 +26,26 @@ import {
 export default function Home() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+
+  // Remove browser focus before navigating to another screen
+  const blurWebFocus = () => {
+    if (Platform.OS === "web" && typeof document !== "undefined") {
+      const activeElement = document.activeElement;
+
+      if (
+        activeElement &&
+        typeof activeElement.blur === "function"
+      ) {
+        activeElement.blur();
+      }
+    }
+  };
+
+  // Navigate after clearing browser focus
+  const navigateWithBlur = (path) => {
+    blurWebFocus();
+    router.push(path);
+  };
 
   // Restore saved login session when Home screen opens
   useEffect(() => {
@@ -53,11 +74,11 @@ export default function Home() {
   // Open token page only for logged-in patients
   const handleGetToken = () => {
     if (!user) {
-      router.push("/login");
+      navigateWithBlur("/login");
       return;
     }
 
-    router.push("/get-token");
+    navigateWithBlur("/get-token");
   };
 
   return (
@@ -76,7 +97,7 @@ export default function Home() {
 
             <TouchableOpacity
               style={styles.notificationButton}
-              onPress={() => router.push("/notifications")}
+              onPress={() => navigateWithBlur("/notifications")}
               activeOpacity={0.8}
             >
               <Ionicons
@@ -116,7 +137,9 @@ export default function Home() {
                   <View style={styles.accountActions}>
                     <TouchableOpacity
                       style={styles.profileButton}
-                      onPress={() => router.push("/profile-settings")}
+                      onPress={() =>
+                        navigateWithBlur("/profile-settings")
+                      }
                       activeOpacity={0.8}
                     >
                       <Ionicons
@@ -133,7 +156,7 @@ export default function Home() {
                     {/* Settings Button */}
                     <TouchableOpacity
                       style={styles.settingsButton}
-                      onPress={() => router.push("/settings")}
+                      onPress={() => navigateWithBlur("/settings")}
                       activeOpacity={0.8}
                     >
                       <Ionicons
@@ -168,7 +191,7 @@ export default function Home() {
 
                   <TouchableOpacity
                     style={styles.loginButton}
-                    onPress={() => router.push("/login")}
+                    onPress={() => navigateWithBlur("/login")}
                   >
                     <Text style={styles.loginButtonText}>Login</Text>
 
@@ -252,9 +275,9 @@ export default function Home() {
             <TouchableOpacity
               onPress={() => {
                 if (user) {
-                  router.push("/my-token");
+                  navigateWithBlur("/my-token");
                 } else {
-                  router.push("/login");
+                  navigateWithBlur("/login");
                 }
               }}
             >
@@ -268,9 +291,9 @@ export default function Home() {
             activeOpacity={0.88}
             onPress={() => {
               if (user) {
-                router.push("/my-token");
+                navigateWithBlur("/my-token");
               } else {
-                router.push("/login");
+                navigateWithBlur("/login");
               }
             }}
           >
@@ -336,7 +359,7 @@ export default function Home() {
             <TouchableOpacity
               style={styles.quickCard}
               activeOpacity={0.88}
-              onPress={() => router.push("/queue")}
+              onPress={() => navigateWithBlur("/queue")}
             >
               <View style={styles.quickIcon}>
                 <Ionicons
@@ -364,7 +387,7 @@ export default function Home() {
             <TouchableOpacity
               style={styles.quickCard}
               activeOpacity={0.88}
-              onPress={() => router.push("/notifications")}
+              onPress={() => navigateWithBlur("/notifications")}
             >
               <View style={styles.quickIcon}>
                 <Ionicons
