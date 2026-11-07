@@ -1,8 +1,8 @@
-
 -- =========================================================
 -- OPTIQUEUE SMART HOSPITAL QUEUE MANAGEMENT SYSTEM
 -- Complete Supabase Database Setup
 -- Supports new and existing databases
+-- Daily token numbers are unique per service and date
 -- =========================================================
 
 BEGIN;
@@ -23,7 +23,6 @@ CREATE TABLE IF NOT EXISTS public.users (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Add missing columns to an existing users table
 ALTER TABLE public.users
     ADD COLUMN IF NOT EXISTS mobile_number VARCHAR(20);
 
@@ -64,7 +63,7 @@ CREATE TABLE IF NOT EXISTS public.counters (
 
 CREATE TABLE IF NOT EXISTS public.tokens (
     id BIGSERIAL PRIMARY KEY,
-    token_number VARCHAR(20) UNIQUE NOT NULL,
+    token_number VARCHAR(20) NOT NULL,
     user_id BIGINT REFERENCES public.users(id),
     service_id BIGINT NOT NULL REFERENCES public.services(id),
     status VARCHAR(20) NOT NULL DEFAULT 'waiting'
@@ -216,6 +215,15 @@ CREATE INDEX IF NOT EXISTS idx_tokens_user_issued
 CREATE INDEX IF NOT EXISTS idx_tokens_counter_id
     ON public.tokens(counter_id);
 
+-- Token numbers are unique per service per calendar day.
+-- Remove the old global UNIQUE constraint if it exists.
+
+ALTER TABLE public.tokens
+    DROP CONSTRAINT IF EXISTS tokens_token_number_key;
+
+CREATE UNIQUE INDEX IF NOT EXISTS tokens_daily_unique_idx
+    ON public.tokens (service_id, (issued_at::date), token_number);
+
 CREATE INDEX IF NOT EXISTS idx_notifications_user_created
     ON public.notifications(user_id, created_at DESC);
 
@@ -248,7 +256,9 @@ ALTER TABLE public.revoked_tokens ENABLE ROW LEVEL SECURITY;
 -- Validates patient account and active service.
 -- =========================================================
 
-CREATE OR REPLACE FUNCTION public.issue_token(
+DROP FUNCTION IF EXISTS public.issue_token(BIGINT, BIGINT);
+
+CREATE FUNCTION public.issue_token(
     p_user_id BIGINT,
     p_service_id BIGINT
 )
@@ -271,39 +281,38 @@ DECLARE
     v_position INTEGER;
     v_token_number VARCHAR(20);
 BEGIN
-
-    -- Validate user ID
+    -- Validate the requested patient ID.
     IF p_user_id IS NULL OR p_user_id < 1 THEN
         RAISE EXCEPTION 'INVALID_USER';
     END IF;
 
-    -- Validate service ID
+    -- Validate the requested service ID.
     IF p_service_id IS NULL OR p_service_id < 1 THEN
         RAISE EXCEPTION 'INVALID_SERVICE';
     END IF;
 
-    -- Verify that the account exists and is a patient
+    -- Only existing patient accounts may receive tokens.
     PERFORM 1
-    FROM public.users
-    WHERE users.id = p_user_id
-      AND users.role = 'patient';
+    FROM public.users AS u
+    WHERE u.id = p_user_id
+      AND u.role = 'patient';
 
     IF NOT FOUND THEN
         RAISE EXCEPTION 'PATIENT_NOT_FOUND';
     END IF;
 
-    -- Find active service
-    SELECT name
+    -- The service must exist and be active.
+    SELECT s.name
     INTO v_service_name
-    FROM public.services
-    WHERE services.id = p_service_id
-      AND is_active = TRUE;
+    FROM public.services AS s
+    WHERE s.id = p_service_id
+      AND s.is_active = TRUE;
 
     IF v_service_name IS NULL THEN
         RAISE EXCEPTION 'SERVICE_NOT_FOUND';
     END IF;
 
-    -- Generate service prefix
+    -- Assign a prefix based on the service name.
     v_prefix := CASE v_service_name
         WHEN 'General Consultation' THEN 'A'
         WHEN 'Specialist Consultation' THEN 'B'
@@ -312,40 +321,37 @@ BEGIN
         ELSE 'X'
     END;
 
-    -- Lock this service while generating its token number
+    -- Serialize token generation for this service.
     PERFORM pg_advisory_xact_lock(p_service_id);
 
-    -- Find the next daily token number
+    -- Find the next number for this service today.
+    -- Ignore malformed suffixes rather than raising a cast error.
     SELECT COALESCE(
-        MAX(
-            CAST(
-                SUBSTRING(token_number FROM 3)
-                AS INTEGER
-            )
-        ),
+        MAX(SUBSTRING(t.token_number FROM 3)::INTEGER),
         0
     ) + 1
     INTO v_next_number
-    FROM public.tokens
-    WHERE service_id = p_service_id
-      AND issued_at::date = CURRENT_DATE
-      AND token_number LIKE v_prefix || '-%';
+    FROM public.tokens AS t
+    WHERE t.service_id = p_service_id
+      AND t.issued_at::date = CURRENT_DATE
+      AND t.token_number LIKE v_prefix || '-%'
+      AND SUBSTRING(t.token_number FROM 3) ~ '^[0-9]+$';
 
-    -- Calculate current queue position
+    -- Calculate the current waiting/serving queue position.
     SELECT COUNT(*) + 1
     INTO v_position
-    FROM public.tokens
-    WHERE service_id = p_service_id
-      AND status IN ('waiting', 'serving')
-      AND issued_at::date = CURRENT_DATE;
+    FROM public.tokens AS t
+    WHERE t.service_id = p_service_id
+      AND t.status IN ('waiting', 'serving')
+      AND t.issued_at::date = CURRENT_DATE;
 
-    -- Generate token number
-    v_token_number :=
-        v_prefix || '-' || LPAD(v_next_number::TEXT, 3, '0');
+    -- Build the token number, e.g. A-001.
+    v_token_number := v_prefix || '-' ||
+        LPAD(v_next_number::TEXT, 3, '0');
 
-    -- Insert token and return result
+    -- Insert the token and return its details.
     RETURN QUERY
-    INSERT INTO public.tokens (
+    INSERT INTO public.tokens AS inserted_token (
         token_number,
         user_id,
         service_id,
@@ -360,13 +366,12 @@ BEGIN
         v_position
     )
     RETURNING
-        tokens.id,
-        tokens.token_number,
-        tokens.service_id,
-        tokens.status,
-        tokens.queue_position,
-        tokens.issued_at;
-
+        inserted_token.id,
+        inserted_token.token_number,
+        inserted_token.service_id,
+        inserted_token.status,
+        inserted_token.queue_position,
+        inserted_token.issued_at;
 END;
 $$;
 
