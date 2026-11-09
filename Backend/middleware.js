@@ -1,3 +1,4 @@
+
 const jwt = require("jsonwebtoken");
 const supabase = require("./db");
 
@@ -51,29 +52,47 @@ async function requireAuth(req, res, next) {
     }
 
     // Check whether the token has been revoked
-    const { data: revokedToken, error: revokedError } = await supabase
+    const {
+      data: revokedToken,
+      error: revokedError,
+    } = await supabase
       .from("revoked_tokens")
       .select("jti")
       .eq("jti", decoded.jti)
       .maybeSingle();
 
     if (revokedError) {
-      return sendError(res, 500, "Authentication verification failed");
+      return sendError(
+        res,
+        500,
+        "Authentication verification failed"
+      );
     }
 
     if (revokedToken) {
-      return sendError(res, 401, "Session has expired. Please login again.");
+      return sendError(
+        res,
+        401,
+        "Session has expired. Please login again."
+      );
     }
 
     // Get the latest user information from database
-    const { data: user, error: userError } = await supabase
+    const {
+      data: user,
+      error: userError,
+    } = await supabase
       .from("users")
       .select("id, role")
       .eq("id", decoded.sub)
       .maybeSingle();
 
     if (userError) {
-      return sendError(res, 500, "Authentication verification failed");
+      return sendError(
+        res,
+        500,
+        "Authentication verification failed"
+      );
     }
 
     if (!user) {
@@ -87,6 +106,8 @@ async function requireAuth(req, res, next) {
 
     // Attach authenticated user information to request
     req.auth = {
+      sub: decoded.sub,
+      exp: decoded.exp,
       userId: user.id,
       role: user.role,
       email: decoded.email,

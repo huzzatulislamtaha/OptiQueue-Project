@@ -1,5 +1,5 @@
-
 const bcrypt = require("bcryptjs");
+
 const supabase = require("./db");
 
 const {
@@ -71,6 +71,7 @@ const register = asyncRoute(async (req, res) => {
     if (error.code === "23505") {
       return sendError(res, 409, "This email is already registered.");
     }
+
     throw error;
   }
 
@@ -177,6 +178,7 @@ const setupAdmin = asyncRoute(async (req, res) => {
     if (error.code === "23505") {
       return sendError(res, 409, "This email is already registered.");
     }
+
     throw error;
   }
 
@@ -238,10 +240,12 @@ const updateProfile = asyncRoute(async (req, res) => {
   const email = normalizeEmail(req.body.email);
   const mobileNumber = String(req.body.mobile_number || "").trim();
 
+  // Required field validation
   if (!name || !email) {
     return sendError(res, 400, "Name and email are required.");
   }
 
+  // Length validation
   if (
     name.length > 100 ||
     email.length > 150 ||
@@ -250,8 +254,18 @@ const updateProfile = asyncRoute(async (req, res) => {
     return sendError(res, 400, "Profile information is too long.");
   }
 
+  // Email validation
   if (!validEmail(email)) {
     return sendError(res, 400, "Please enter a valid email address.");
+  }
+
+  // Bangladesh mobile number validation
+  if (mobileNumber && !/^01[3-9]\d{8}$/.test(mobileNumber)) {
+    return sendError(
+      res,
+      400,
+      "Please enter a valid 11-digit Bangladeshi mobile number."
+    );
   }
 
   const { data, error } = await supabase
@@ -270,6 +284,7 @@ const updateProfile = asyncRoute(async (req, res) => {
     if (error.code === "23505") {
       return sendError(res, 409, "This email is already registered.");
     }
+
     throw error;
   }
 
@@ -421,6 +436,7 @@ const createPatientToken = asyncRoute(async (req, res) => {
     if (error.message?.includes("SERVICE_NOT_FOUND")) {
       return sendError(res, 404, "Service not found or inactive.");
     }
+
     throw error;
   }
 
